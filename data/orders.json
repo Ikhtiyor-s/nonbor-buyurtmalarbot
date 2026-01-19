@@ -1,0 +1,376 @@
+[
+  {
+    "id": "4a177e53-7508-408d-a38d-6b3d3b9978aa",
+    "external_id": "1676",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1676",
+    "customer_phone": "",
+    "total_amount": 63500200,
+    "items": [
+      {
+        "name": "Mastava",
+        "price": 35000,
+        "quantity": 1
+      },
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      },
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "400",
+    "notified_at": "2026-01-19T17:00:45.924304",
+    "created_at": "2026-01-19T17:00:45.924304",
+    "updated_at": "2026-01-19T17:00:45.924304",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "8b415f87-da93-4de6-a538-3d507c52084f",
+    "external_id": "1674",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1674",
+    "customer_phone": "",
+    "total_amount": 3500000,
+    "items": [
+      {
+        "name": "Mastava",
+        "price": 35000,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "401",
+    "notified_at": "2026-01-19T17:00:46.098470",
+    "created_at": "2026-01-19T17:00:46.098470",
+    "updated_at": "2026-01-19T17:00:46.098470",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "59c32b78-ce0f-43e9-b57e-99bd82b8f813",
+    "external_id": "1672",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1672",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "402",
+    "notified_at": "2026-01-19T17:00:46.287402",
+    "created_at": "2026-01-19T17:00:46.288446",
+    "updated_at": "2026-01-19T17:00:46.288446",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "c3740871-edc1-4991-8800-39570b8fccba",
+    "external_id": "1662",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1662",
+    "customer_phone": "",
+    "total_amount": 20000100,
+    "items": [
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "403",
+    "notified_at": "2026-01-19T17:00:46.485315",
+    "created_at": "2026-01-19T17:00:46.485315",
+    "updated_at": "2026-01-19T17:00:46.485315",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "c42e9044-6d94-4b39-b43b-567761751a83",
+    "external_id": "1660",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1660",
+    "customer_phone": "",
+    "total_amount": 20000100,
+    "items": [
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "404",
+    "notified_at": "2026-01-19T17:00:46.644387",
+    "created_at": "2026-01-19T17:00:46.644387",
+    "updated_at": "2026-01-19T17:00:46.645384",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "035897b1-585d-4a04-a734-a42e32263706",
+    "external_id": "1716",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 200001,
+    "items": [],
+    "telegram_message_id": "406",
+    "notified_at": "2026-01-19T17:00:53.898794",
+    "created_at": "2026-01-19T17:00:53.898794",
+    "updated_at": "2026-01-19T17:00:53.899793",
+    "amocrm_lead_id": 48902385
+  },
+  {
+    "id": "064f41c3-1eda-45b6-a76e-1266843eea63",
+    "external_id": "1604",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1604",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [],
+    "telegram_message_id": "407",
+    "notified_at": "2026-01-19T17:00:54.056990",
+    "created_at": "2026-01-19T17:00:54.056990",
+    "updated_at": "2026-01-19T17:00:54.058000",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "9a7855c5-810c-47f4-bb03-f1af23e24d47",
+    "external_id": "1603",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1603",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [],
+    "telegram_message_id": "408",
+    "notified_at": "2026-01-19T17:00:54.224045",
+    "created_at": "2026-01-19T17:00:54.224045",
+    "updated_at": "2026-01-19T17:00:54.224045",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "4b5eed29-ee19-4551-8bc0-1407e5fa7dda",
+    "external_id": "1602",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1602",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [],
+    "telegram_message_id": "409",
+    "notified_at": "2026-01-19T17:00:54.371639",
+    "created_at": "2026-01-19T17:00:54.371639",
+    "updated_at": "2026-01-19T17:00:54.371639",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "ce9594fb-c30d-485f-91f1-9f016922a462",
+    "external_id": "1618",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1618",
+    "customer_phone": "",
+    "total_amount": 20000100,
+    "items": [
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "411",
+    "notified_at": "2026-01-19T17:01:03.995638",
+    "created_at": "2026-01-19T17:01:03.995638",
+    "updated_at": "2026-01-19T17:01:03.995638",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "c8f1adb5-994c-4b5b-9e72-8b409eb0a718",
+    "external_id": "1616",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1616",
+    "customer_phone": "",
+    "total_amount": 23700100,
+    "items": [
+      {
+        "name": "Mastava",
+        "price": 35000,
+        "quantity": 1
+      },
+      {
+        "name": "Samarqandcha osh",
+        "price": 100,
+        "quantity": 1
+      }
+    ],
+    "telegram_message_id": "412",
+    "notified_at": "2026-01-19T17:01:04.303074",
+    "created_at": "2026-01-19T17:01:04.303074",
+    "updated_at": "2026-01-19T17:01:04.303074",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "6dc2256b-1249-4655-8a19-39bc21c7a793",
+    "external_id": "1605",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Mijoz #1605",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [],
+    "telegram_message_id": "413",
+    "notified_at": "2026-01-19T17:01:04.585537",
+    "created_at": "2026-01-19T17:01:04.585537",
+    "updated_at": "2026-01-19T17:01:04.585537",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "eb3bc87d-ff3c-4706-ad45-bc66d14b8645",
+    "external_id": "1601",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "rejected",
+    "customer_name": "Mijoz #1601",
+    "customer_phone": "",
+    "total_amount": 100,
+    "items": [],
+    "telegram_message_id": "414",
+    "notified_at": "2026-01-19T17:01:04.836771",
+    "created_at": "2026-01-19T17:01:04.836771",
+    "updated_at": "2026-01-19T17:03:30.945527",
+    "amocrm_lead_id": null
+  },
+  {
+    "id": "6f20fcbd-ad0f-4488-b7a3-efd9bba43833",
+    "external_id": "1749",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "accepted",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 200001,
+    "items": [],
+    "telegram_message_id": "416",
+    "notified_at": "2026-01-19T17:04:20.083676",
+    "created_at": "2026-01-19T17:04:20.083676",
+    "updated_at": "2026-01-19T17:30:23.009595",
+    "amocrm_lead_id": 48953727
+  },
+  {
+    "id": "2cca694d-bc75-4f23-a4f3-67cce0cdc8e4",
+    "external_id": "1755",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 202351,
+    "items": [],
+    "telegram_message_id": "417",
+    "notified_at": "2026-01-19T18:31:29.955152",
+    "created_at": "2026-01-19T18:31:29.956324",
+    "updated_at": "2026-01-19T18:31:29.956324",
+    "amocrm_lead_id": 48956507
+  },
+  {
+    "id": "441f728a-74d7-470e-822a-9afc6fcf4f1d",
+    "external_id": "1761",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "accepted",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 2350,
+    "items": [],
+    "telegram_message_id": "418",
+    "notified_at": "2026-01-19T19:00:32.112004",
+    "created_at": "2026-01-19T19:00:32.112004",
+    "updated_at": "2026-01-19T20:42:00.426558",
+    "amocrm_lead_id": 48957505
+  },
+  {
+    "id": "b637a237-6a85-4181-b1da-ff126875fdcc",
+    "external_id": "1762",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 200001,
+    "items": [],
+    "telegram_message_id": "419",
+    "notified_at": "2026-01-19T19:09:59.133845",
+    "created_at": "2026-01-19T19:09:59.138854",
+    "updated_at": "2026-01-19T19:09:59.138854",
+    "amocrm_lead_id": 48957863
+  },
+  {
+    "id": "1e8a5e2e-2e74-4320-9de9-267fd22251b2",
+    "external_id": "1766",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "ready",
+    "customer_name": "Ixtiyor Suyunov",
+    "customer_phone": "+998948679300",
+    "total_amount": 2001,
+    "items": [],
+    "telegram_message_id": "420",
+    "notified_at": "2026-01-19T19:27:06.169430",
+    "created_at": "2026-01-19T19:27:06.170100",
+    "updated_at": "2026-01-19T19:27:39.839516",
+    "amocrm_lead_id": 48958345,
+    "delivery_address": ""
+  },
+  {
+    "id": "0efb8d08-076b-452b-8ad4-805113bcd9c3",
+    "external_id": "7771",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Pickup Mijoz",
+    "customer_phone": "+998901111111",
+    "total_amount": 100000,
+    "items": [
+      {
+        "name": "Osh",
+        "price": 50000,
+        "quantity": 2
+      }
+    ],
+    "telegram_message_id": "429",
+    "notified_at": "2026-01-20T00:20:02.472173",
+    "created_at": "2026-01-20T00:20:02.472593",
+    "updated_at": "2026-01-20T00:20:02.472593",
+    "amocrm_lead_id": null,
+    "delivery_address": "",
+    "delivery_type": "pickup"
+  },
+  {
+    "id": "dcf12b7d-d42c-4752-b5f4-84ce8afed41b",
+    "external_id": "7772",
+    "seller_id": "23d4a9c7-a247-46b4-9b2d-8ee48eee2012",
+    "status": "new",
+    "customer_name": "Delivery Mijoz",
+    "customer_phone": "+998902222222",
+    "total_amount": 150000,
+    "items": [
+      {
+        "name": "Lag'mon",
+        "price": 75000,
+        "quantity": 2
+      }
+    ],
+    "telegram_message_id": "430",
+    "notified_at": "2026-01-20T00:20:02.672435",
+    "created_at": "2026-01-20T00:20:02.672435",
+    "updated_at": "2026-01-20T00:20:02.672435",
+    "amocrm_lead_id": null,
+    "delivery_address": "Toshkent, Yunusobod",
+    "delivery_type": "delivery"
+  }
+]

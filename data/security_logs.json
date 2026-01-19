@@ -1,0 +1,29 @@
+[
+  {
+    "id": "12c4ce61-79f7-455e-a5af-5ca8dc52f193",
+    "log_type": "otp_sent",
+    "phone": "+998948679300",
+    "telegram_user_id": "1154426667",
+    "ip_address": "",
+    "details": "Manual rejim (SMS sozlanmagan)",
+    "created_at": "2026-01-19T03:47:22.440041"
+  },
+  {
+    "id": "20b0a472-6cfc-4cdd-9803-b365bcb2de74",
+    "log_type": "otp_sent",
+    "phone": "+998948679300",
+    "telegram_user_id": "1154426667",
+    "ip_address": "",
+    "details": "Manual rejim (SMS sozlanmagan)",
+    "created_at": "2026-01-19T12:01:30.023719"
+  },
+  {
+    "id": "327dd1be-e8c6-4fc3-b254-ce37782a745b",
+    "log_type": "otp_verified",
+    "phone": "+998948679300",
+    "telegram_user_id": "1154426667",
+    "ip_address": "",
+    "details": "OTP tasdiqlandi",
+    "created_at": "2026-01-19T12:01:42.018438"
+  }
+]

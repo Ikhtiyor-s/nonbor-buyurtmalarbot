@@ -1,0 +1,30 @@
+[
+  {
+    "id": "0ad2ded1-02cb-41fc-8ff6-2a74d9386bcd",
+    "phone": "+998948679300",
+    "otp_code": "156664",
+    "telegram_user_id": "1154426667",
+    "delivery_method": "manual",
+    "is_verified": false,
+    "is_expired": true,
+    "attempts": 0,
+    "created_at": "2026-01-19T03:47:22.438134",
+    "expires_at": "2026-01-19T03:52:22.438134",
+    "verified_at": null,
+    "ip_address": ""
+  },
+  {
+    "id": "3a265c04-7352-4bd0-8013-3f56058a64a5",
+    "phone": "+998948679300",
+    "otp_code": "161644",
+    "telegram_user_id": "1154426667",
+    "delivery_method": "manual",
+    "is_verified": true,
+    "is_expired": false,
+    "attempts": 0,
+    "created_at": "2026-01-19T12:01:30.022720",
+    "expires_at": "2026-01-19T12:06:30.022720",
+    "verified_at": "2026-01-19T12:01:42.017403",
+    "ip_address": ""
+  }
+]

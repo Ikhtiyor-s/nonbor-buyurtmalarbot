@@ -1,0 +1,22 @@
+[
+  {
+    "id": 460970569,
+    "entity_id": 48900757,
+    "created_by": 0,
+    "updated_by": 0,
+    "created_at": 1768651780,
+    "updated_at": 1768651780,
+    "responsible_user_id": 13014746,
+    "group_id": 0,
+    "note_type": "common",
+    "params": {
+      "text": "BUYURTMA TAFSILOTLARI\n\n Order ID: #1713\n Narx: 200,001 so'm\n Sana: 17.01.2026 17:09\n\n To'lov: CASH\n Yetkazib berish: PICKUP\n\n\n MAHSULOTLAR:\n\n1. Samarqandcha osh\n   Miqdor: 1 ta\n   Narx: 1 so'm\n\n BIZNES:\n   Nomi: Milliy\n    Tel: 998948679300\n    Manzil: Oʻzbekiston, Toshkent, Qibray koʻchasi, 55\n    Viloyat: Toshkent shahri\n   ️ Tuman: Мирзо-Улугбекский район\n\n MIJOZ:\n   Username: 998948679300"
+    },
+    "account_id": 32678306,
+    "_links": {
+      "self": {
+        "href": "https://welltech.amocrm.ru/api/v4/leads/48900757/notes/460970569?page=1&limit=250"
+      }
+    }
+  }
+]
