@@ -17,14 +17,30 @@ PENDING_REGISTRATIONS = {}
 
 
 async def is_admin(user_id: int) -> bool:
+    """Admin tekshirish - Telegram ID yoki telefon raqam orqali"""
+    from .models import PhoneRegistry
+
+    # 1. Telegram ID bo'yicha tekshirish
     admin_ids = os.getenv('ADMIN_IDS', '').split(',')
-    return str(user_id) in admin_ids
+    if str(user_id) in admin_ids:
+        return True
+
+    # 2. Telefon raqam bo'yicha tekshirish
+    allowed_phones = os.getenv('ALLOWED_PHONES', '').split(',')
+    allowed_phones = [p.strip() for p in allowed_phones if p.strip()]
+
+    if allowed_phones:
+        # Foydalanuvchining ro'yxatdan o'tgan telefon raqamini tekshirish
+        phone_registry = PhoneRegistry.get_by_telegram_id(str(user_id))
+        if phone_registry and phone_registry.phone in allowed_phones:
+            return True
+
+    return False
 
 
 async def is_allowed_user(user_id: int) -> bool:
     """Faqat ruxsat berilgan foydalanuvchilarni tekshirish"""
-    admin_ids = os.getenv('ADMIN_IDS', '').split(',')
-    return str(user_id) in admin_ids
+    return await is_admin(user_id)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
