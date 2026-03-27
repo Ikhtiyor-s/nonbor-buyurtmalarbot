@@ -38,9 +38,32 @@ async def is_admin(user_id: int) -> bool:
     return False
 
 
+async def is_seller(user_id: int):
+    """Foydalanuvchi seller ekanligini tekshirish - telefon raqam orqali.
+    Agar seller bo'lsa, Seller obyektini qaytaradi, aks holda None."""
+    from .models import PhoneRegistry, Seller
+
+    phone_registry = PhoneRegistry.get_by_telegram_id(str(user_id))
+    if phone_registry:
+        seller = Seller.get(phone=phone_registry.phone, is_active=True)
+        if seller:
+            return seller
+
+    # Telegram user ID orqali ham tekshirish
+    sellers = Seller.filter(is_active=True)
+    for seller in sellers:
+        if seller.telegram_user_id == str(user_id):
+            return seller
+
+    return None
+
+
 async def is_allowed_user(user_id: int) -> bool:
-    """Faqat ruxsat berilgan foydalanuvchilarni tekshirish"""
-    return await is_admin(user_id)
+    """Admin yoki seller ekanligini tekshirish"""
+    if await is_admin(user_id):
+        return True
+    seller = await is_seller(user_id)
+    return seller is not None
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -66,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Shaxsiy chatda
     # Adminlar uchun admin panel
-    is_admin_user = await is_allowed_user(user.id)
+    is_admin_user = await is_admin(user.id)
     logger.info(f"is_admin_user: {is_admin_user}")
 
     if is_admin_user:
@@ -281,7 +304,7 @@ async def handle_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def add_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    if not await is_allowed_user(user.id):
+    if not await is_admin(user.id):
         return
 
     args = context.args
@@ -344,7 +367,7 @@ async def add_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     args = context.args
@@ -383,7 +406,7 @@ async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def list_sellers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     from .models import Seller
@@ -422,7 +445,7 @@ async def list_sellers(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def delete_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     args = context.args
@@ -457,7 +480,7 @@ async def delete_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def test_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     args = context.args
@@ -554,7 +577,7 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     await update.message.reply_text(
@@ -582,7 +605,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return
 
     from .models import Seller, Order
@@ -671,7 +694,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_group_id_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Guruh ID xabarini qabul qilish"""
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return False
 
     # Tekshirish: foydalanuvchi guruh ID kutayaptimi?
@@ -737,7 +760,7 @@ async def handle_group_id_message(update: Update, context: ContextTypes.DEFAULT_
 
 async def handle_new_phone_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Yangi telefon raqamini qabul qilish"""
-    if not await is_allowed_user(update.effective_user.id):
+    if not await is_admin(update.effective_user.id):
         return False
 
     # Tekshirish: foydalanuvchi yangi telefon kutayaptimi?
@@ -1198,6 +1221,79 @@ async def handle_otp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 
+async def handle_private_otp_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Private chatda OTP tekshirish - boshqa raqamdan kirishga uringan foydalanuvchi uchun.
+    Agar foydalanuvchi boshqa biznes raqamini kiritgan bo'lsa va OTP kodi yuborilgan bo'lsa,
+    bu handler OTP kodni tekshiradi va ro'yxatdan o'tkazadi.
+    """
+    from .models import PhoneRegistry, Seller
+
+    chat = update.effective_chat
+    user = update.effective_user
+
+    # Faqat shaxsiy chatda
+    if chat.type != 'private':
+        return False
+
+    # OTP kutilayaptimi tekshirish
+    waiting_phone = context.user_data.get('waiting_private_otp_phone')
+    if not waiting_phone:
+        return False
+
+    text = update.message.text.strip() if update.message.text else ""
+
+    # 6 xonali raqam
+    if not text.isdigit() or len(text) != 6:
+        return False
+
+    logger.info(f"Private OTP verification: code={text}, phone={waiting_phone}, user={user.id}")
+
+    # OTP Manager orqali tekshirish
+    is_valid, message = otp_manager.verify_otp(waiting_phone, text, str(user.id))
+
+    if is_valid:
+        # Kod to'g'ri - foydalanuvchini ro'yxatdan o'tkazish
+        registry = PhoneRegistry(
+            phone=waiting_phone,
+            telegram_user_id=str(user.id),
+            telegram_username=user.username or '',
+            full_name=user.full_name or user.first_name or '',
+            is_verified=True
+        )
+        registry.save()
+
+        # Seller'ning telegram_user_id ni ham yangilash
+        seller = Seller.get(phone=waiting_phone, is_active=True)
+        if seller:
+            seller.telegram_user_id = str(user.id)
+            seller.save()
+
+        # Context tozalash
+        context.user_data.pop('waiting_private_otp_phone', None)
+
+        logger.info(f"Private OTP verified: {waiting_phone} -> user {user.id}")
+
+        await update.message.reply_text(
+            f"✅ <b>Tasdiqlandi! Muvaffaqiyatli ro'yxatdan o'tdingiz!</b>\n\n"
+            f"📞 <b>Telefon:</b> {waiting_phone}\n\n"
+            f"Endi guruhingizni ulash uchun:\n"
+            f"1️⃣ Guruh yarating yoki mavjud guruhga botni qo'shing\n"
+            f"2️⃣ Guruhda /start bosing\n"
+            f"3️⃣ Telefon raqamingizni yuboring: <code>{waiting_phone}</code>\n"
+            f"4️⃣ OTP kodi <b>shu chatga</b> keladi\n"
+            f"5️⃣ Kodni guruhga yozing va guruhni ulang",
+            parse_mode='HTML'
+        )
+        return True
+    else:
+        await update.message.reply_text(
+            f"❌ <b>Xato!</b>\n\n{message}",
+            parse_mode='HTML'
+        )
+        return True
+
+
 # Aliases for app.py compatibility
 add_seller_command = add_seller
 list_sellers_command = list_sellers
@@ -1541,6 +1637,106 @@ async def handle_private_phone_registration(update: Update, context: ContextType
     waiting_registration = context.user_data.get('waiting_phone_registration')
 
     if waiting_registration:
+        from .models import Seller
+
+        # ==========================================
+        # XAVFSIZLIK: Boshqa raqamdan kirishga urinish tekshirish
+        # ==========================================
+        existing_seller = Seller.get(phone=clean_phone, is_active=True)
+
+        if existing_seller:
+            # Bu telefon allaqachon seller'ga tegishli
+            existing_registry = PhoneRegistry.get_by_phone(clean_phone)
+
+            # Agar telefon boshqa foydalanuvchiga ulangan bo'lsa
+            if existing_registry and existing_registry.telegram_user_id != str(user.id):
+                # Biznes egasiga OGOHLANTIRISH yuborish
+                try:
+                    warning_text = (
+                        f"🚨 <b>OGOHLANTIRISH!</b>\n\n"
+                        f"Sizning raqamingizdan kirishga urinilmoqda!\n\n"
+                        f"📞 <b>Raqam:</b> {clean_phone}\n"
+                        f"🏪 <b>Biznes:</b> {existing_seller.full_name}\n\n"
+                        f"👤 <b>Urinayotgan shaxs:</b>\n"
+                        f"   Ism: {user.full_name or user.first_name or 'Noma`lum'}\n"
+                        f"   Username: @{user.username or 'noma`lum'}\n"
+                        f"   ID: <code>{user.id}</code>\n\n"
+                        f"⚠️ Agar bu siz bo'lmasangiz, admin bilan bog'laning!"
+                    )
+                    await context.bot.send_message(
+                        chat_id=int(existing_registry.telegram_user_id),
+                        text=warning_text,
+                        parse_mode='HTML'
+                    )
+                    logger.warning(f"Unauthorized access attempt: user {user.id} tried phone {clean_phone}")
+                except Exception as e:
+                    logger.error(f"Failed to send unauthorized access warning: {e}")
+
+                # Biznes egasiga OTP yuborish
+                success, otp_msg = await otp_manager.send_otp(clean_phone, existing_registry.telegram_user_id)
+
+                if success:
+                    # OTP kodni kutish holatini o'rnatish
+                    context.user_data['waiting_phone_registration'] = False
+                    context.user_data['waiting_private_otp_phone'] = clean_phone
+
+                    await update.message.reply_text(
+                        f"⚠️ <b>Bu raqam boshqa biznesga tegishli!</b>\n\n"
+                        f"📞 <code>{clean_phone}</code>\n"
+                        f"🏪 <b>Biznes:</b> {existing_seller.full_name}\n\n"
+                        f"Biznes egasiga ogohlantirish va tasdiqlash kodi yuborildi.\n\n"
+                        f"Agar bu sizning raqamingiz bo'lsa, biznes egasiga yuborilgan "
+                        f"<b>6 xonali tasdiqlash kodini</b> shu yerga kiriting:",
+                        parse_mode='HTML'
+                    )
+                else:
+                    context.user_data.pop('waiting_phone_registration', None)
+                    await update.message.reply_text(
+                        f"⚠️ <b>Bu raqam boshqa biznesga tegishli!</b>\n\n"
+                        f"📞 <code>{clean_phone}</code>\n\n"
+                        f"Biznes egasiga ogohlantirish yuborildi.\n"
+                        f"{otp_msg}",
+                        parse_mode='HTML'
+                    )
+                return True
+
+            # Agar seller bor lekin PhoneRegistry da yo'q va seller'ning telegram_user_id boshqa
+            elif not existing_registry and existing_seller.telegram_user_id and existing_seller.telegram_user_id != str(user.id):
+                # Seller'ning Telegram ID'siga ogohlantirish
+                try:
+                    warning_text = (
+                        f"🚨 <b>OGOHLANTIRISH!</b>\n\n"
+                        f"Sizning raqamingizdan kirishga urinilmoqda!\n\n"
+                        f"📞 <b>Raqam:</b> {clean_phone}\n"
+                        f"🏪 <b>Biznes:</b> {existing_seller.full_name}\n\n"
+                        f"👤 <b>Urinayotgan shaxs:</b>\n"
+                        f"   Ism: {user.full_name or user.first_name or 'Noma`lum'}\n"
+                        f"   Username: @{user.username or 'noma`lum'}\n"
+                        f"   ID: <code>{user.id}</code>\n\n"
+                        f"⚠️ Agar bu siz bo'lmasangiz, admin bilan bog'laning!"
+                    )
+                    await context.bot.send_message(
+                        chat_id=int(existing_seller.telegram_user_id),
+                        text=warning_text,
+                        parse_mode='HTML'
+                    )
+                    logger.warning(f"Unauthorized access attempt: user {user.id} tried phone {clean_phone}")
+                except Exception as e:
+                    logger.error(f"Failed to send unauthorized access warning: {e}")
+
+                context.user_data.pop('waiting_phone_registration', None)
+                await update.message.reply_text(
+                    f"⚠️ <b>Bu raqam boshqa biznesga tegishli!</b>\n\n"
+                    f"📞 <code>{clean_phone}</code>\n\n"
+                    f"Biznes egasiga ogohlantirish yuborildi.\n"
+                    f"Agar bu sizning raqamingiz bo'lsa, avval guruhda ro'yxatdan o'ting.",
+                    parse_mode='HTML'
+                )
+                return True
+
+        # ==========================================
+        # Normal ro'yxatdan o'tish
+        # ==========================================
         # PhoneRegistry ga saqlash
         registry = PhoneRegistry(
             phone=clean_phone,

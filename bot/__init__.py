@@ -205,6 +205,9 @@ def run_bot():
         # Xodim qo'shish - ism
         if await staff_manager.handle_staff_name(update, context):
             return
+        # Private chatda OTP tekshirish (ruxsatsiz kirish urinishi uchun)
+        if await handlers.handle_private_otp_verification(update, context):
+            return
         # Guruhdan tasdiqlash kodi
         if await handlers.handle_verification_code(update, context):
             return

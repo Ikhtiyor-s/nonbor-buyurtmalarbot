@@ -57,10 +57,108 @@ def get_main_menu_keyboard():
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from .handlers import is_admin
+    from .models import Seller, PhoneRegistry
+
     query = update.callback_query
     await query.answer()
 
     data = query.data
+    user_id = query.from_user.id
+
+    # ==========================================
+    # ADMIN CALLBACK TEKSHIRISH - faqat admin ko'ra oladi
+    # ==========================================
+    ADMIN_EXACT_CALLBACKS = {
+        "admin_stats", "admin_sellers", "admin_search", "admin_test", "admin_notify",
+        "menu_back", "back_admin", "menu_add_seller", "menu_list_sellers", "menu_sellers",
+        "menu_set_group", "menu_test_order", "menu_stats", "menu_help",
+        "back_to_regions", "notify_add", "notify_all", "notify_confirm", "notify_do_send", "notify_cancel",
+        "stats_daily", "stats_monthly", "stats_yearly", "stats_all"
+    }
+
+    ADMIN_PREFIX_CALLBACKS = [
+        "region_", "district|", "page_regions|", "page_district|", "page_sellers|",
+        "test_page_", "test_send_", "notify_view_", "notify_edit_", "notify_delete_", "notify_send_",
+        "notify_region_", "setgroup_region|", "setgroup_district|", "setgroup_",
+        "edit_seller|", "edit_phone|", "cancel_edit|", "remove_group|", "testorder_",
+        "cancelsetgroup_"
+    ]
+
+    is_admin_callback = data in ADMIN_EXACT_CALLBACKS or any(data.startswith(p) for p in ADMIN_PREFIX_CALLBACKS)
+
+    if is_admin_callback and not await is_admin(user_id):
+        await query.answer("⛔ Bu funksiya faqat admin uchun!", show_alert=True)
+        return
+
+    # ==========================================
+    # SELLER CALLBACK - BIZNES EGASI TEKSHIRISH
+    # ==========================================
+    SELLER_PREFIXES = ["seller_stats_", "seller_staff_", "seller_back_", "seller_settings_", "add_staff_"]
+
+    for prefix in SELLER_PREFIXES:
+        if data.startswith(prefix):
+            seller_id = data[len(prefix):]
+            seller = Seller.get(id=seller_id)
+            if seller:
+                is_owner = False
+                # 1. Telegram user ID orqali
+                if seller.telegram_user_id == str(user_id):
+                    is_owner = True
+                # 2. Telefon orqali
+                if not is_owner:
+                    phone_reg = PhoneRegistry.get_by_telegram_id(str(user_id))
+                    if phone_reg and phone_reg.phone == seller.phone:
+                        is_owner = True
+                # 3. Admin ham ko'ra oladi
+                if not is_owner:
+                    is_owner = await is_admin(user_id)
+
+                if not is_owner:
+                    await query.answer("⛔ Siz bu biznesning egasi emassiz!", show_alert=True)
+                    return
+            break
+
+    # rmstaff_ va delstaff_ uchun staff orqali seller egasini tekshirish
+    if data.startswith("rmstaff_") or data.startswith("delstaff_"):
+        from .models import Staff
+        staff_uuid = data.replace("rmstaff_", "").replace("delstaff_", "")
+        staff_member = Staff.get(id=staff_uuid)
+        if staff_member:
+            seller = Seller.get(id=staff_member.seller_id)
+            if seller:
+                is_owner = False
+                if seller.telegram_user_id == str(user_id):
+                    is_owner = True
+                if not is_owner:
+                    phone_reg = PhoneRegistry.get_by_telegram_id(str(user_id))
+                    if phone_reg and phone_reg.phone == seller.phone:
+                        is_owner = True
+                if not is_owner:
+                    is_owner = await is_admin(user_id)
+                if not is_owner:
+                    await query.answer("⛔ Siz bu biznesning egasi emassiz!", show_alert=True)
+                    return
+
+    # remove_staff| uchun ham tekshirish
+    if data.startswith("remove_staff|"):
+        parts = data.split("|")
+        if len(parts) >= 2:
+            r_seller_id = parts[1]
+            seller = Seller.get(id=r_seller_id)
+            if seller:
+                is_owner = False
+                if seller.telegram_user_id == str(user_id):
+                    is_owner = True
+                if not is_owner:
+                    phone_reg = PhoneRegistry.get_by_telegram_id(str(user_id))
+                    if phone_reg and phone_reg.phone == seller.phone:
+                        is_owner = True
+                if not is_owner:
+                    is_owner = await is_admin(user_id)
+                if not is_owner:
+                    await query.answer("⛔ Siz bu biznesning egasi emassiz!", show_alert=True)
+                    return
 
     if data.startswith("accept_"):
         order_id = data.replace("accept_", "")
@@ -1897,11 +1995,14 @@ async def search_order_by_id(order_id: str, query_or_update, context):
         if order.status in ['completed', 'delivering', 'ready', 'accepted']:
             message += f"📊 Status: {status_name}\n"
 
+        customer = order.customer_name or "Noma'lum"
+        customer_ph = order.customer_phone or "Ko'rsatilmagan"
+        amount_str = f"{order.total_amount:,}".replace(",", " ")
         message += (
             f"\n━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 <b>Mijoz:</b> {order.customer_name or 'Noma\\'lum'}\n"
-            f"📞 <b>Telefon:</b> {order.customer_phone or 'Ko\\'rsatilmagan'}\n"
-            f"💰 <b>Summa:</b> {order.total_amount:,} so'm".replace(",", " ")
+            f"👤 <b>Mijoz:</b> {customer}\n"
+            f"📞 <b>Telefon:</b> {customer_ph}\n"
+            f"💰 <b>Summa:</b> {amount_str} so'm"
         )
 
     # Xabarni yuborish
