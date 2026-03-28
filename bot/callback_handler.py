@@ -40,14 +40,40 @@ def get_back_button(callback_data="back_admin"):
     return [[InlineKeyboardButton("◀️ Ortga", callback_data=callback_data)]]
 
 
-def get_admin_menu_keyboard():
-    """Admin panel asosiy menyu tugmalari"""
+def pair_buttons(buttons):
+    """Tugmalar ro'yxatini 2 tadan juftlab qatorlarga joylashtirish"""
+    rows = []
+    for i in range(0, len(buttons), 2):
+        if i + 1 < len(buttons):
+            rows.append([buttons[i], buttons[i + 1]])
+        else:
+            rows.append([buttons[i]])
+    return rows
+
+
+def get_admin_menu_keyboard(period="daily", orders_count=0, calls_count=0, scheduled_count=0):
+    """Admin panel asosiy menyu tugmalari - eski dizayn"""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Statistika", callback_data="admin_stats")],
-        [InlineKeyboardButton("📋 Sotuvchilar ro'yxati", callback_data="admin_sellers")],
-        [InlineKeyboardButton("🔍 Buyurtma qidirish", callback_data="admin_search")],
-        [InlineKeyboardButton("🧪 Test buyurtma", callback_data="admin_test")],
-        [InlineKeyboardButton("📢 Xabarnoma yuborish", callback_data="admin_notify")]
+        [
+            InlineKeyboardButton(("✅ " if period == "daily" else "") + "📅 Kunlik", callback_data="stats_daily"),
+            InlineKeyboardButton(("✅ " if period == "weekly" else "") + "🗓 Haftalik", callback_data="stats_weekly")
+        ],
+        [
+            InlineKeyboardButton(("✅ " if period == "monthly" else "") + "📁 Oylik", callback_data="stats_monthly"),
+            InlineKeyboardButton(("✅ " if period == "yearly" else "") + "🏳 Yillik", callback_data="stats_yearly")
+        ],
+        [
+            InlineKeyboardButton(f"📦 Buyurtmalar ({orders_count})", callback_data="admin_orders"),
+            InlineKeyboardButton(f"📞 Qo'ng'iroqlar ({calls_count})", callback_data="admin_calls")
+        ],
+        [
+            InlineKeyboardButton("👥 Bizneslar", callback_data="admin_sellers"),
+            InlineKeyboardButton("📢 Xabarnomalar", callback_data="admin_notify")
+        ],
+        [
+            InlineKeyboardButton(f"📅 Reja buyurtmalar ({scheduled_count})", callback_data="admin_scheduled"),
+            InlineKeyboardButton("🔍 Qidirish", callback_data="admin_search")
+        ]
     ])
 
 
@@ -71,14 +97,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     ADMIN_EXACT_CALLBACKS = {
         "admin_stats", "admin_sellers", "admin_search", "admin_test", "admin_notify",
+        "admin_orders", "admin_calls", "admin_scheduled",
         "menu_back", "back_admin", "menu_add_seller", "menu_list_sellers", "menu_sellers",
         "menu_set_group", "menu_test_order", "menu_stats", "menu_help",
         "back_to_regions", "notify_add", "notify_all", "notify_confirm", "notify_do_send", "notify_cancel",
-        "stats_daily", "stats_monthly", "stats_yearly", "stats_all"
+        "stats_daily", "stats_weekly", "stats_monthly", "stats_yearly", "stats_all"
     }
 
     ADMIN_PREFIX_CALLBACKS = [
-        "region_", "district|", "page_regions|", "page_district|", "page_sellers|",
+        "region_", "district|", "page_", "page_regions|", "page_district|", "page_sellers|",
         "test_page_", "test_send_", "notify_view_", "notify_edit_", "notify_delete_", "notify_send_",
         "notify_region_", "setgroup_region|", "setgroup_district|", "setgroup_",
         "edit_seller|", "edit_phone|", "cancel_edit|", "remove_group|", "testorder_",
@@ -182,18 +209,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "menu_back" or data == "back_admin":
         # Admin panel asosiy menyuga qaytish
-        user = query.from_user
-        message = (
-            f"👨‍💼 <b>ADMIN PANEL</b>\n\n"
-            f"Salom, <b>{user.first_name}</b>!\n\n"
-            f"🤖 Nonbor Buyurtmalar Bot - bizneslar uchun buyurtma notification tizimi.\n\n"
-            f"Quyidagi tugmalardan foydalaning:"
-        )
-        await query.message.edit_text(
-            text=message,
-            reply_markup=get_admin_menu_keyboard(),
-            parse_mode='HTML'
-        )
+        await show_admin_stats(query, "daily")
 
     # ==========================================
     # YANGI ADMIN PANEL CALLBACKS
@@ -209,6 +225,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_test":
         await show_test_order_businesses(query, 0)
+
+    elif data == "admin_orders":
+        await show_admin_stats(query)
+
+    elif data == "admin_calls":
+        await show_admin_stats(query)
+
+    elif data == "admin_scheduled":
+        await show_admin_stats(query)
 
     elif data == "admin_notify":
         await show_notification_templates(query)
@@ -328,19 +353,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "menu_stats":
-        await show_stats(query)
-
-    elif data == "stats_daily":
-        await show_stats(query, period="daily")
-
-    elif data == "stats_monthly":
-        await show_stats(query, period="monthly")
-
-    elif data == "stats_yearly":
-        await show_stats(query, period="yearly")
-
-    elif data == "stats_all":
-        await show_stats(query, period="all")
+        await show_admin_stats(query)
 
     elif data == "menu_help":
         await show_help(query)
@@ -537,21 +550,21 @@ async def show_regions_list(query, page=0):
 
     keyboard = []
 
-    # 1. Guruh ulash tugmasi
-    keyboard.append([InlineKeyboardButton("🔗 Guruh ulash", callback_data="menu_set_group")])
-
-    # 2. Viloyatlar
+    # 1. Viloyatlar - 2 tadan juftlab
+    region_buttons = []
     for region in regions:
         count = region_counts.get(region['id'], 0)
         if count > 0:
             btn_text = f"🏙 {region['name']} ({count})"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"region_{region['id']}")])
+            region_buttons.append(InlineKeyboardButton(btn_text, callback_data=f"region_{region['id']}"))
 
     # Viloyati belgilanmaganlar
     if no_region_count > 0:
-        keyboard.append([InlineKeyboardButton(f"❓ Viloyati noma'lum ({no_region_count})", callback_data="region_unknown")])
+        region_buttons.append(InlineKeyboardButton(f"❓ Noma'lum ({no_region_count})", callback_data="region_unknown"))
 
-    # 3. Pagination tugmalari
+    keyboard.extend(pair_buttons(region_buttons))
+
+    # 2. Pagination tugmalari
     if total_pages > 1:
         pagination_btns = []
         if page > 0:
@@ -561,8 +574,11 @@ async def show_regions_list(query, page=0):
         if pagination_btns:
             keyboard.append(pagination_btns)
 
-    # 4. Ortga tugmasi
-    keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")])
+    # 3. Guruh ulash + Ortga bir qatorda
+    keyboard.append([
+        InlineKeyboardButton("🔗 Guruh ulash", callback_data="menu_set_group"),
+        InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")
+    ])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
@@ -636,10 +652,8 @@ async def show_districts_list(query, region_id, page=0):
 
     keyboard = []
 
-    # 1. Guruh ulash tugmasi (shu viloyat uchun)
-    keyboard.append([InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_region|{region_id}")])
-
-    # 2. Tumanlar
+    # 1. Tumanlar - 2 tadan juftlab
+    district_buttons = []
     if region_id != "unknown":
         for region in regions:
             if region['id'] == region_id:
@@ -647,14 +661,16 @@ async def show_districts_list(query, region_id, page=0):
                     count = district_counts.get(district['id'], 0)
                     if count > 0:
                         btn_text = f"📍 {district['name']} ({count})"
-                        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"district|{region_id}|{district['id']}")])
+                        district_buttons.append(InlineKeyboardButton(btn_text, callback_data=f"district|{region_id}|{district['id']}"))
                 break
 
     # Tumani belgilanmaganlar
     if no_district_count > 0:
-        keyboard.append([InlineKeyboardButton(f"❓ Tumani noma'lum ({no_district_count})", callback_data=f"district|{region_id}|unknown")])
+        district_buttons.append(InlineKeyboardButton(f"❓ Noma'lum ({no_district_count})", callback_data=f"district|{region_id}|unknown"))
 
-    # 3. Pagination tugmalari
+    keyboard.extend(pair_buttons(district_buttons))
+
+    # 2. Pagination tugmalari
     if total_pages > 1:
         pagination_btns = []
         if page > 0:
@@ -664,8 +680,11 @@ async def show_districts_list(query, region_id, page=0):
         if pagination_btns:
             keyboard.append(pagination_btns)
 
-    # 4. Ortga tugmasi (viloyatlarga qaytish)
-    keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data="back_to_regions")])
+    # 3. Guruh ulash + Ortga bir qatorda
+    keyboard.append([
+        InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_region|{region_id}"),
+        InlineKeyboardButton("◀️ Ortga", callback_data="back_to_regions")
+    ])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
@@ -733,10 +752,7 @@ async def show_sellers_by_location(query, region_id, district_id, page=0):
 
     keyboard = []
 
-    # 1. Guruh ulash tugmasi (shu tuman uchun)
-    keyboard.append([InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_district|{region_id}|{district_id}")])
-
-    # 2. Pagination tugmalari
+    # 1. Pagination tugmalari
     if total_pages > 1:
         pagination_btns = []
         if page > 0:
@@ -746,8 +762,11 @@ async def show_sellers_by_location(query, region_id, district_id, page=0):
         if pagination_btns:
             keyboard.append(pagination_btns)
 
-    # 3. Ortga tugmasi (viloyatga qaytish)
-    keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data=f"region_{region_id}")])
+    # 2. Guruh ulash + Ortga bir qatorda
+    keyboard.append([
+        InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_district|{region_id}|{district_id}"),
+        InlineKeyboardButton("◀️ Ortga", callback_data=f"region_{region_id}")
+    ])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
@@ -796,12 +815,13 @@ async def show_sellers_for_group(query, region_id, district_id):
     message += f"📍 <b>{location_name}</b>\n"
     message += f"Qaysi sotuvchiga guruh ulashni xohlaysiz?\n\n"
 
-    keyboard = []
+    seller_buttons = []
     for i, seller in enumerate(filtered_sellers, 1):
         status = "✅" if seller.group_chat_id else "⚠️"
         btn_text = f"{status} {i}. {seller.full_name}"
-        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"setgroup_{seller.id}")])
+        seller_buttons.append(InlineKeyboardButton(btn_text, callback_data=f"setgroup_{seller.id}"))
 
+    keyboard = pair_buttons(seller_buttons)
     keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data=back_callback)])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
@@ -832,12 +852,13 @@ async def show_sellers_list(query, for_group_setup=False):
         message += "Qaysi sotuvchiga guruh ulashni xohlaysiz?\n"
         message += "Sotuvchini tanlang:\n\n"
 
-        keyboard = []
+        seller_buttons = []
         for i, seller in enumerate(sellers, 1):
             status = "✅" if seller.group_chat_id else "⚠️"
             btn_text = f"{status} {i}. {seller.full_name}"
-            keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"setgroup_{seller.id}")])
+            seller_buttons.append(InlineKeyboardButton(btn_text, callback_data=f"setgroup_{seller.id}"))
 
+        keyboard = pair_buttons(seller_buttons)
         keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")])
 
         await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
@@ -862,8 +883,10 @@ async def show_sellers_list(query, for_group_setup=False):
         message += "✅ - Guruh ulangan | ⚠️ - Guruh ulanmagan"
 
         keyboard = [
-            [InlineKeyboardButton("🔗 Guruh ulash", callback_data="menu_set_group")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")]
+            [
+                InlineKeyboardButton("🔗 Guruh ulash", callback_data="menu_set_group"),
+                InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")
+            ]
         ]
         await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
@@ -997,8 +1020,10 @@ async def send_test_order(query, seller_id):
 
     if not seller.group_chat_id:
         keyboard = [
-            [InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_{seller_id}")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")]
+            [
+                InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_{seller_id}"),
+                InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")
+            ]
         ]
         await query.message.edit_text(
             f"⚠️ <b>{seller.full_name}</b> uchun guruh ulanmagan!\n\n"
@@ -1035,8 +1060,10 @@ async def send_test_order(query, seller_id):
     success = await bot.send_order_notification(test_order_data)
 
     keyboard = [
-        [InlineKeyboardButton("🧪 Yana test", callback_data=f"testorder_{seller_id}")],
-        [InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")]
+        [
+            InlineKeyboardButton("🧪 Yana test", callback_data=f"testorder_{seller_id}"),
+            InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")
+        ]
     ]
 
     if success:
@@ -1076,8 +1103,10 @@ async def ask_group_id(query, seller_id, context):
     context.user_data['waiting_group_id'] = seller_id
 
     keyboard = [
-        [InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_seller|{seller_id}")],
-        [InlineKeyboardButton("◀️ Ortga", callback_data="menu_sellers")]
+        [
+            InlineKeyboardButton("✏️ Tahrirlash", callback_data=f"edit_seller|{seller_id}"),
+            InlineKeyboardButton("◀️ Ortga", callback_data="menu_sellers")
+        ]
     ]
 
     current_group = f"\n\n📍 Hozirgi guruh: <code>{seller.group_chat_id}</code>" if seller.group_chat_id else ""
@@ -1108,15 +1137,22 @@ async def show_edit_seller_menu(query, seller_id):
         await query.answer("Sotuvchi topilmadi!", show_alert=True)
         return
 
-    keyboard = [
-        [InlineKeyboardButton("📞 Telefon raqamni o'zgartirish", callback_data=f"edit_phone|{seller_id}")]
-    ]
-
-    # Guruh ulangan bo'lsa, o'chirish tugmasini qo'shish
+    # Guruh ulangan bo'lsa, phone + delete + back ni juftlab joylashtirish
     if seller.group_chat_id:
-        keyboard.append([InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")])
-
-    keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")])
+        keyboard = [
+            [
+                InlineKeyboardButton("📞 Telefon o'zgartirish", callback_data=f"edit_phone|{seller_id}"),
+                InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")
+            ],
+            [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
+        ]
+    else:
+        keyboard = [
+            [
+                InlineKeyboardButton("📞 Telefon o'zgartirish", callback_data=f"edit_phone|{seller_id}"),
+                InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")
+            ]
+        ]
 
     # Guruh ma'lumotlari
     if seller.group_chat_id:
@@ -1641,7 +1677,7 @@ async def show_seller_staff(query, seller_id):
     # Xodimlarni yuklash
     staff_members = Staff.filter(seller_id=seller_id, is_active=True)
 
-    keyboard = []
+    staff_delete_buttons = []
 
     if staff_members:
         message = f"👥 <b>Xodimlar - {seller.full_name}</b>\n\n"
@@ -1663,7 +1699,7 @@ async def show_seller_staff(query, seller_id):
             message += f"    🏷 {role_name}\n\n"
 
             # Xodimni o'chirish tugmasi
-            keyboard.append([InlineKeyboardButton(f"🗑 {staff.full_name} ni o'chirish", callback_data=f"rmstaff_{staff.id}")])
+            staff_delete_buttons.append(InlineKeyboardButton(f"🗑 {staff.full_name}", callback_data=f"rmstaff_{staff.id}"))
 
         message += f"━━━━━━━━━━━━━━━━━━━━\n"
         message += f"Jami: {len(staff_members)} ta xodim"
@@ -1672,6 +1708,7 @@ async def show_seller_staff(query, seller_id):
         message += "📭 Hozircha xodimlar yo'q.\n\n"
         message += "Yangi xodim qo'shish uchun quyidagi tugmani bosing."
 
+    keyboard = pair_buttons(staff_delete_buttons)
     keyboard.append([InlineKeyboardButton("➕ Xodim qo'shish", callback_data=f"add_staff_{seller_id}")])
     keyboard.append([
         InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{seller_id}"),
@@ -1857,59 +1894,55 @@ async def show_admin_stats(query, period="daily"):
     # Davr bo'yicha filtrlaymiz
     if period == "daily":
         filtered_orders = filter_orders_by_date(all_orders, today_start)
-        period_title = "📅 Bugungi"
+        period_start = today_start
     elif period == "weekly":
         filtered_orders = filter_orders_by_date(all_orders, week_start)
-        period_title = "📆 Haftalik"
+        period_start = week_start
     elif period == "monthly":
         filtered_orders = filter_orders_by_date(all_orders, month_start)
-        period_title = "📆 Oylik"
+        period_start = month_start
     elif period == "yearly":
         filtered_orders = filter_orders_by_date(all_orders, year_start)
-        period_title = "📊 Yillik"
+        period_start = year_start
     else:
         filtered_orders = all_orders
-        period_title = "📊 Umumiy"
+        period_start = None
 
     total_orders = len(filtered_orders)
     accepted_orders = len([o for o in filtered_orders if o.get('status') in ['accepted', 'ready', 'delivering', 'completed']])
     rejected_orders = len([o for o in filtered_orders if o.get('status') in ['rejected', 'cancelled']])
     pending_orders = len([o for o in filtered_orders if o.get('status') == 'new'])
-    expired_orders = len([o for o in filtered_orders if o.get('status') == 'expired'])
+    # telegram'siz - expired yoki source='no_telegram'
+    no_telegram_orders = len([o for o in filtered_orders if o.get('status') == 'expired' or o.get('source') == 'no_telegram'])
 
-    # Jami savdo summasi (faqat qabul qilingan/yakunlangan buyurtmalar)
-    completed_statuses = ['accepted', 'ready', 'delivering', 'completed']
-    total_amount = sum(o.get('total_amount', 0) for o in filtered_orders if o.get('status') in completed_statuses)
+    # Qo'ng'iroqlar soni (hozircha 0)
+    calls_count = 0
 
-    # Foizlar
-    accepted_percent = (accepted_orders / total_orders * 100) if total_orders > 0 else 0
-    rejected_percent = (rejected_orders / total_orders * 100) if total_orders > 0 else 0
+    # Reja buyurtmalar soni (hozircha 0)
+    scheduled_count = 0
 
-    # Davr tugmalari
-    keyboard = [
-        [
-            InlineKeyboardButton("📅 Kunlik" + (" ✓" if period == "daily" else ""), callback_data="stats_daily"),
-            InlineKeyboardButton("📆 Haftalik" + (" ✓" if period == "weekly" else ""), callback_data="stats_weekly"),
-        ],
-        [
-            InlineKeyboardButton("📆 Oylik" + (" ✓" if period == "monthly" else ""), callback_data="stats_monthly"),
-            InlineKeyboardButton("📊 Yillik" + (" ✓" if period == "yearly" else ""), callback_data="stats_yearly"),
-        ],
-        [InlineKeyboardButton("◀️ Ortga", callback_data="back_admin")]
-    ]
+    # Davr oralig'i
+    if period_start:
+        date_range = f"{period_start.strftime('%d.%m.%Y')} - {now.strftime('%d.%m.%Y')}"
+    else:
+        date_range = "Barcha vaqt"
+
+    message = (
+        f"📦 <b>BUYURTMALAR:</b> {total_orders}\n"
+        f"    ✅ qabul: {accepted_orders}\n"
+        f"    ❌ bekor: {rejected_orders}\n"
+        f"    📵 telegram'siz: {no_telegram_orders}\n"
+        f"    ⏳ jarayondagi: {pending_orders}\n\n"
+        f"📞 <b>QO'NG'IROQLAR:</b> {calls_count}\n\n"
+        f"📅 <b>REJA BUYURTMALAR:</b> {scheduled_count}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📆 <b>Davr:</b> {date_range}"
+    )
 
     await query.message.edit_text(
-        f"{period_title} <b>STATISTIKA</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 <b>Buyurtmalar:</b> {total_orders} ta\n"
-        f"✅ Qabul qilingan: {accepted_orders} ta ({accepted_percent:.1f}%)\n"
-        f"❌ Rad etilgan: {rejected_orders} ta ({rejected_percent:.1f}%)\n"
-        f"⏳ Kutilmoqda: {pending_orders} ta\n"
-        f"⌛ Muddati o'tgan: {expired_orders} ta\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Jami savdo:</b> {total_amount:,.0f} so'm".replace(",", " "),
+        message,
         parse_mode='HTML',
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        reply_markup=get_admin_menu_keyboard(period=period, orders_count=total_orders, calls_count=calls_count, scheduled_count=scheduled_count)
     )
 
 
@@ -2046,11 +2079,13 @@ async def show_test_order_businesses(query, page=0):
     if total_pages > 1:
         message += f"📄 Sahifa: {page + 1}/{total_pages}\n\n"
 
-    keyboard = []
+    business_buttons = []
     for i, seller in enumerate(page_sellers, start_idx + 1):
         status = "✅" if seller.group_chat_id else "⚠️"
         btn_text = f"{status} {i}. {seller.full_name}"
-        keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"test_send_{seller.id}")])
+        business_buttons.append(InlineKeyboardButton(btn_text, callback_data=f"test_send_{seller.id}"))
+
+    keyboard = pair_buttons(business_buttons)
 
     # Pagination tugmalari
     if total_pages > 1:
@@ -2079,7 +2114,7 @@ async def show_notification_templates(query):
 
     message = "📢 <b>XABARNOMA YUBORISH</b>\n\n"
 
-    keyboard = []
+    template_buttons = []
 
     if templates:
         message += "Shablon xabarlar:\n\n"
@@ -2087,16 +2122,19 @@ async def show_notification_templates(query):
             # Sarlavhani 30 belgigacha qisqartirish
             title = template.title[:30] + "..." if len(template.title) > 30 else template.title
             message += f"{template.order_num}️⃣ {title}\n"
-            keyboard.append([InlineKeyboardButton(
+            template_buttons.append(InlineKeyboardButton(
                 f"{template.order_num}️⃣ {title}",
                 callback_data=f"notify_view_{template.id}"
-            )])
+            ))
     else:
         message += "📭 Shablon xabarlar yo'q.\n\n"
         message += "Yangi shablon qo'shish uchun quyidagi tugmani bosing."
 
-    keyboard.append([InlineKeyboardButton("➕ Yangi shablon qo'shish", callback_data="notify_add")])
-    keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data="back_admin")])
+    keyboard = pair_buttons(template_buttons)
+    keyboard.append([
+        InlineKeyboardButton("➕ Yangi shablon", callback_data="notify_add"),
+        InlineKeyboardButton("◀️ Ortga", callback_data="back_admin")
+    ])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -2220,15 +2258,17 @@ async def show_notification_recipients(query, template_id, context):
         [InlineKeyboardButton(f"📢 Barchaga ({total_sellers})", callback_data="notify_all")]
     ]
 
-    # Viloyatlar
+    # Viloyatlar - 2 tadan juftlab
+    notify_region_buttons = []
     for region in regions:
         count = region_counts.get(region['id'], 0)
         if count > 0:
-            keyboard.append([InlineKeyboardButton(
+            notify_region_buttons.append(InlineKeyboardButton(
                 f"🏙 {region['name']} ({count})",
                 callback_data=f"notify_region_{region['id']}"
-            )])
+            ))
 
+    keyboard.extend(pair_buttons(notify_region_buttons))
     keyboard.append([InlineKeyboardButton("❌ Bekor qilish", callback_data="admin_notify")])
 
     await query.message.edit_text(message, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
@@ -2279,23 +2319,24 @@ async def toggle_region_selection(query, region_id, context):
     else:
         message += "Viloyatlarni tanlang:"
 
-    keyboard = []
-
     # Tanlangan viloyatlarni ko'rsatish
     region_counts = {}
     for seller in sellers:
         if seller.region:
             region_counts[seller.region] = region_counts.get(seller.region, 0) + 1
 
+    toggle_buttons = []
     for region in regions:
         count = region_counts.get(region['id'], 0)
         if count > 0:
             is_selected = region['id'] in selected
             prefix = "✅ " if is_selected else "🏙 "
-            keyboard.append([InlineKeyboardButton(
+            toggle_buttons.append(InlineKeyboardButton(
                 f"{prefix}{region['name']} ({count})",
                 callback_data=f"notify_region_{region['id']}"
-            )])
+            ))
+
+    keyboard = pair_buttons(toggle_buttons)
 
     if selected:
         keyboard.append([InlineKeyboardButton("📤 Yuborish", callback_data="notify_confirm")])

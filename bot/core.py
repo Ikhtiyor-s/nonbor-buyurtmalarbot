@@ -207,8 +207,11 @@ async def fetch_and_send_orders():
         return
 
     try:
+        api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+        headers = {"X-Telegram-Bot-Secret": api_secret}
+
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
+            async with session.get(api_url, headers=headers) as response:
                 if response.status != 200:
                     logger.error(f"API error: {response.status}")
                     return

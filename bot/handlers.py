@@ -93,20 +93,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"is_admin_user: {is_admin_user}")
 
     if is_admin_user:
-        keyboard = [
-            [InlineKeyboardButton("📊 Statistika", callback_data="admin_stats")],
-            [InlineKeyboardButton("📋 Sotuvchilar ro'yxati", callback_data="admin_sellers")],
-            [InlineKeyboardButton("🔍 Buyurtma qidirish", callback_data="admin_search")],
-            [InlineKeyboardButton("🧪 Test buyurtma", callback_data="admin_test")],
-            [InlineKeyboardButton("📢 Xabarnoma yuborish", callback_data="admin_notify")]
-        ]
-        message = (
-            f"👨‍💼 <b>ADMIN PANEL</b>\n\n"
-            f"Salom, <b>{user.first_name}</b>!\n\n"
-            f"🤖 Nonbor Buyurtmalar Bot - bizneslar uchun buyurtma notification tizimi.\n\n"
-            f"Quyidagi tugmalardan foydalaning:"
+        # Admin panel - eski dizayn (statistika + tugmalar)
+        from .models import Order
+        all_orders = Order.load_all()
+        now = datetime.now()
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        daily_orders = []
+        for o in all_orders:
+            created = o.get('created_at', '')
+            if created:
+                try:
+                    od = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                    if od.replace(tzinfo=None) >= today_start:
+                        daily_orders.append(o)
+                except:
+                    pass
+
+        total = len(daily_orders)
+        accepted = len([o for o in daily_orders if o.get('status') in ['accepted', 'ready', 'delivering', 'completed']])
+        rejected = len([o for o in daily_orders if o.get('status') in ['rejected', 'cancelled']])
+        pending = len([o for o in daily_orders if o.get('status') == 'new'])
+        calls_count = len([o for o in daily_orders if o.get('customer_phone')])
+
+        from .callback_handler import get_admin_menu_keyboard
+        reply_markup = get_admin_menu_keyboard(
+            period="daily", orders_count=total,
+            calls_count=calls_count, scheduled_count=0
         )
-        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message = (
+            f"🏳 BUGUNGI HISOBOT\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📦 <b>BUYURTMALAR:</b> {total} ta\n"
+            f"├ ✅ Qabul qilindi: {accepted}\n"
+            f"├ ❌ Bekor qilindi: {rejected}\n"
+            f"├ 🎉 Telegram'siz qabul: 0\n"
+            f"└ 🔄 Jarayondagi: {pending}\n\n"
+            f"📞 <b>QO'NG'IROQLAR:</b> {calls_count} ta\n"
+            f"├ ✅ Javob berildi: {accepted}\n"
+            f"├ ❌ Javob berilmadi: {rejected}\n"
+            f"├ 1️⃣ 1-urinishda: 0\n"
+            f"└ 2️⃣ 2-urinishda: 0\n\n"
+            f"📅 <b>REJA BUYURTMALAR:</b> 0 ta\n\n"
+            f"🗓 Davr: {now.strftime('%Y-%m-%d')} - {now.strftime('%Y-%m-%d')}\n\n"
+            f"<i>Batafsil ko'rish uchun tugmalarni bosing:</i>"
+        )
         await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='HTML')
         return
 
@@ -871,8 +903,10 @@ async def handle_group_phone_message(update: Update, context: ContextTypes.DEFAU
         api_url = os.getenv('EXTERNAL_API_URL', 'https://test.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
 
         found_business = None
+        api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+        headers = {"X-Telegram-Bot-Secret": api_secret}
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
+            async with session.get(api_url, headers=headers) as response:
                 if response.status == 200:
                     orders = await response.json()
 
