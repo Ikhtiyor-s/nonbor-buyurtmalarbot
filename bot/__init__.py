@@ -1,4 +1,4 @@
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, PicklePersistence
 import os
 import logging
 import asyncio
@@ -14,8 +14,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def order_polling_loop(app):
+    """
+    Nonbor API polling loop: avvalgi javob kelgandan keyin POLL_INTERVAL sekund kutadi.
+    Har doim faqat bitta so'rov ishlaydi — serverga ortiqcha yuklama yo'q.
+    """
+    from .core import fetch_and_send_orders
+    poll_interval = int(os.getenv('POLL_INTERVAL', 5))
+    logger.info(f"Order polling loop boshlandi (interval={poll_interval}s javobdan keyin)")
+    while True:
+        try:
+            await fetch_and_send_orders()
+        except Exception as e:
+            logger.error(f"Order polling error: {e}")
+        await asyncio.sleep(poll_interval)
+
+
 async def order_polling_job(context):
-    """Real-time buyurtmalarni tekshirish (Nonbor API)"""
+    """Fallback job (loop ishga tushmasa uchun)"""
     from .core import fetch_and_send_orders
     try:
         await fetch_and_send_orders()
@@ -32,6 +48,42 @@ async def cleanup_expired_orders_job(context):
         await cleanup_expired_orders()
     except Exception as e:
         logger.error(f"Cleanup expired orders error: {e}")
+
+
+async def check_missed_orders_job(context):
+    """Qabul qilinmagan buyurtmalar haqida admin guruhga xabar"""
+    from .core import check_missed_orders
+    try:
+        await check_missed_orders()
+    except Exception as e:
+        logger.error(f"Missed orders check error: {e}")
+
+
+async def call_sellers_job(context):
+    """Qabul qilinmagan buyurtmalar uchun Asterisk AMI orqali qo'ng'iroq"""
+    from .core import check_and_call_sellers
+    try:
+        await check_and_call_sellers()
+    except Exception as e:
+        logger.error(f"Call sellers error: {e}")
+
+
+async def sync_businesses_job(context):
+    """Nonbor API dan bizneslarni sellers.json ga sync qilish"""
+    from .core import sync_businesses_from_api
+    try:
+        await sync_businesses_from_api()
+    except Exception as e:
+        logger.error(f"Businesses sync error: {e}")
+
+
+async def admin_summary_job(context):
+    """Admin guruhidagi yagona xabarni yangilash"""
+    from .core import update_admin_group_summary
+    try:
+        await update_admin_group_summary()
+    except Exception as e:
+        logger.error(f"Admin summary update error: {e}")
 
 
 async def update_sellers_group_info(application):
@@ -95,7 +147,8 @@ def run_bot():
         print("\n" + "="*50)
         return
 
-    application = ApplicationBuilder().token(token).build()
+    persistence = PicklePersistence(filepath=os.path.join(os.path.dirname(__file__), '..', 'data', 'bot_persistence.pkl'))
+    application = ApplicationBuilder().token(token).persistence(persistence).build()
 
     # Dashboard va Staff Manager instansiyalari
     dashboard = VendorDashboard()
@@ -226,15 +279,8 @@ def run_bot():
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # Buyurtmalarni real-time tekshirish (har 3 sekundda)
-    poll_interval = int(os.getenv('POLL_INTERVAL', 3))
+    poll_interval = int(os.getenv('POLL_INTERVAL', 5))
     job_queue = application.job_queue
-    job_queue.run_repeating(
-        order_polling_job,
-        interval=poll_interval,
-        first=3,
-        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
-    )
 
     # Muddati o'tgan buyurtmalarni tozalash (har 2 sekundda - real-time)
     cleanup_interval = 2  # 2 sekund
@@ -246,6 +292,43 @@ def run_bot():
         job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 10}
     )
     print(f"\nExpired orders cleanup faollashtirildi (har 2 sek tekshiriladi, {order_expiry_minutes} daqiqadan keyin o'chiriladi)")
+
+    # Qabul qilinmagan buyurtmalar tekshirish (har 5 sekundda)
+    job_queue.run_repeating(
+        check_missed_orders_job,
+        interval=5,
+        first=10,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 10}
+    )
+    print("\nMissed orders alert faollashtirildi (har 5 sek tekshiriladi)")
+
+    # Asterisk AMI qo'ng'iroq (har 15 sekundda tekshiriladi)
+    retry_interval = int(os.getenv('RETRY_INTERVAL', 30))
+    job_queue.run_repeating(
+        call_sellers_job,
+        interval=15,
+        first=20,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 15}
+    )
+    print(f"\nAsterisk AMI autodialer faollashtirildi (har 15 sek tekshiriladi, retry={retry_interval}s)")
+
+    # Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
+    job_queue.run_repeating(
+        sync_businesses_job,
+        interval=300,
+        first=5,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 60}
+    )
+    print("\nBizneslar auto-sync faollashtirildi (startup + har 5 daqiqada)")
+
+    # Admin guruh summary xabari (har 5 sekundda tekshiradi, o'zgarish bo'lsa yangilaydi)
+    job_queue.run_repeating(
+        admin_summary_job,
+        interval=5,
+        first=15,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 10}
+    )
+    print("\nAdmin guruh summary faollashtirildi (har 5 sek tekshiriladi)")
 
     print("\n" + "="*50)
     print("SELLER BOT - AVTONOM TIZIM ISHGA TUSHDI")
@@ -268,12 +351,13 @@ def run_bot():
     print("\nOTP Monitoring:")
     print("  /otp_stats      - OTP statistikasi")
     print("  /otp_security   - Xavfsizlik hisoboti")
-    print("\nBuyurtmalar har " + str(poll_interval) + " sekundda tekshiriladi")
+    print(f"\nBuyurtmalar: javob kelgandan keyin {poll_interval}s kutib tekshiriladi")
     print("\n" + "="*50 + "\n")
 
-    # Bot ishga tushganda guruh ma'lumotlarini yangilash
+    # Bot ishga tushganda: guruh ma'lumotlari yangilash + polling loop boshlash
     async def post_init(app):
         await update_sellers_group_info(app)
+        asyncio.create_task(order_polling_loop(app))
 
     application.post_init = post_init
 

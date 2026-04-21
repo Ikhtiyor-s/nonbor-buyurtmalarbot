@@ -172,7 +172,8 @@ class Seller:
     def __init__(self, id=None, phone='', full_name='', telegram_user_id='',
                  group_chat_id='', group_invite_link='', group_title='',
                  is_active=True, created_at=None, api_identifier='',
-                 address='', lat=None, long=None, region='', district=''):
+                 address='', lat=None, long=None, region='', district='',
+                 business_phone='', business_status=''):
         self.id = id or str(uuid.uuid4())
         self.phone = phone
         self.full_name = full_name
@@ -188,6 +189,8 @@ class Seller:
         self.long = long
         self.region = region
         self.district = district
+        self.business_phone = business_phone
+        self.business_status = business_status
 
     def to_dict(self):
         return {
@@ -205,12 +208,20 @@ class Seller:
             'lat': self.lat,
             'long': self.long,
             'region': self.region,
-            'district': self.district
+            'district': self.district,
+            'business_phone': self.business_phone,
+            'business_status': self.business_status,
         }
-    
+
     @classmethod
     def from_dict(cls, data):
-        return cls(**data)
+        known = {
+            'id', 'phone', 'full_name', 'telegram_user_id', 'group_chat_id',
+            'group_invite_link', 'group_title', 'is_active', 'created_at',
+            'api_identifier', 'address', 'lat', 'long', 'region', 'district',
+            'business_phone', 'business_status',
+        }
+        return cls(**{k: v for k, v in data.items() if k in known})
     
     def save(self):
         ensure_data_dir()
@@ -380,6 +391,57 @@ class Order:
             if match:
                 result.append(cls.from_dict(o))
         return result
+
+
+class AdminSettings:
+    """Admin sozlamalari — settings.json da saqlanadi"""
+    _FILE = os.path.join(DATA_DIR, 'settings.json')
+
+    @classmethod
+    def _load(cls):
+        ensure_data_dir()
+        if os.path.exists(cls._FILE):
+            with open(cls._FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+
+    @classmethod
+    def _save(cls, data):
+        ensure_data_dir()
+        with open(cls._FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def get(cls, key, default=None):
+        return cls._load().get(key, default)
+
+    @classmethod
+    def set(cls, key, value):
+        data = cls._load()
+        data[key] = value
+        cls._save(data)
+
+    @classmethod
+    def get_admin_group_chat_id(cls):
+        return cls.get('admin_group_chat_id')
+
+    @classmethod
+    def get_admin_group_title(cls):
+        return cls.get('admin_group_title', '')
+
+    @classmethod
+    def set_admin_group(cls, chat_id, title=''):
+        data = cls._load()
+        data['admin_group_chat_id'] = str(chat_id)
+        data['admin_group_title'] = title
+        cls._save(data)
+
+    @classmethod
+    def remove_admin_group(cls):
+        data = cls._load()
+        data.pop('admin_group_chat_id', None)
+        data.pop('admin_group_title', None)
+        cls._save(data)
 
 
 class OTPRequest:

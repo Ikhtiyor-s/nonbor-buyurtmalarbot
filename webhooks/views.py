@@ -4,6 +4,7 @@ Webhook Views - API dan kelgan xabarlarni qabul qilish
 import json
 import logging
 import asyncio
+import os
 from datetime import datetime
 
 from django.http import JsonResponse
@@ -34,6 +35,68 @@ def run_async(coro):
             return future.result()
     else:
         return loop.run_until_complete(coro)
+
+
+@csrf_exempt
+@require_POST
+def nonbor_webhook(request):
+    """
+    Nonbor API dan kelgan webhook — yangi buyurtma push notification.
+    Nonbor bu endpoint ga POST qiladi, bot darhol xabar yuboradi.
+
+    Header: X-Telegram-Bot-Secret: nonbor-secret-key
+    Body: Nonbor native order JSON (polling API dagi format)
+    """
+    # Secret key tekshirish
+    expected_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+    incoming_secret = request.headers.get('X-Telegram-Bot-Secret', '')
+    if incoming_secret != expected_secret:
+        logger.warning(f"Nonbor webhook: noto'g'ri secret key ({request.META.get('REMOTE_ADDR')})")
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    # Nonbor formatini normallashtirish
+    # Yagona order yoki list bo'lishi mumkin
+    if isinstance(data, list):
+        orders = data
+    elif isinstance(data, dict):
+        if 'result' in data and isinstance(data['result'], dict):
+            orders = data['result'].get('results', [])
+        elif 'results' in data:
+            orders = data['results']
+        else:
+            orders = [data]
+    else:
+        return JsonResponse({'error': 'Unexpected format'}, status=400)
+
+    if not orders:
+        return JsonResponse({'status': 'ok', 'processed': 0})
+
+    processed = 0
+    for order in orders:
+        order_id = order.get('id')
+        if not order_id:
+            continue
+
+        state = (order.get('state') or '').upper()
+        NEW_ORDER_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
+        if state and state not in NEW_ORDER_STATES:
+            continue
+
+        try:
+            from bot.core import _process_single_order
+            success = run_async(_process_single_order(order))
+            if success:
+                processed += 1
+                logger.info(f"Nonbor webhook: buyurtma #{order_id} qayta ishlandi")
+        except Exception as e:
+            logger.exception(f"Nonbor webhook: buyurtma #{order_id} xatosi: {e}")
+
+    return JsonResponse({'status': 'ok', 'processed': processed})
 
 
 @csrf_exempt

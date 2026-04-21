@@ -17,11 +17,11 @@ logger = logging.getLogger('bot')
 class NonborAPIPoller:
     """
     Nonbor API dan buyurtmalarni polling qilish
-    https://test.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/
+    https://prod.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/
     """
 
     def __init__(self):
-        self.api_url = os.getenv('EXTERNAL_API_URL', 'https://test.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
+        self.api_url = os.getenv('EXTERNAL_API_URL', 'https://prod.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
         self.api_key = os.getenv('EXTERNAL_API_KEY', '')
         self.poll_interval = int(os.getenv('POLL_INTERVAL', '30'))
         self.processed_orders: Set[int] = set()

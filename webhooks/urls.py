@@ -5,6 +5,9 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
+    # Nonbor API webhook — yangi buyurtma kelganda push qiladi
+    path('nonbor/', views.nonbor_webhook, name='nonbor_webhook'),
+
     # API webhook - tashqi API dan buyurtmalar qabul qilish
     path('api/', views.api_webhook, name='api_webhook'),
 

@@ -333,69 +333,205 @@ async def handle_group_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
+async def fetch_businesses_from_api():
+    """Nonbor API dan barcha tasdiqlangan bizneslar ro'yxatini olish"""
+    import aiohttp
+    api_url = os.getenv('BUSINESSES_API_URL', 'https://prod.nonbor.uz/api/v2/telegram_bot/businesses/accepted/')
+    api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+    try:
+        headers = {"X-Telegram-Bot-Secret": api_secret}
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers, timeout=timeout) as response:
+                if response.status != 200:
+                    logger.error(f"Businesses fetch error: {response.status}")
+                    return []
+                data = await response.json()
+
+        # Format: {"success": true, "result": [...]}
+        if isinstance(data, dict):
+            items = data.get('result', data.get('results', []))
+        else:
+            items = data if isinstance(data, list) else []
+
+        businesses = []
+        for b in items:
+            phone = b.get('phone_number', '') or b.get('phone', '')
+            if phone and not phone.startswith('+'):
+                phone = '+' + phone
+            region = b.get('region_name_uz', '')
+            district = b.get('district_name_uz', '')
+            address = f"{region}, {district}".strip(', ') if region or district else ''
+            businesses.append({
+                'id': b.get('id'),
+                'title': b.get('title', ''),
+                'phone': phone,
+                'address': address,
+                'region': region,
+                'district': district,
+                'owner': f"{b.get('owner_first_name', '')} {b.get('owner_last_name', '')}".strip(),
+            })
+        return businesses
+    except Exception as e:
+        logger.error(f"fetch_businesses_from_api error: {e}")
+        return []
+
+
+REGION_DISPLAY_NAMES = {
+    'toshkent': 'Toshkent',
+    'samarqand': 'Samarqand',
+    'andijon': 'Andijon',
+    'fargona': "Farg'ona",
+    'namangan': 'Namangan',
+    'buxoro': 'Buxoro',
+    'xorazm': 'Xorazm',
+    'navoiy': 'Navoiy',
+    'qashqadaryo': 'Qashqadaryo',
+    'surxondaryo': 'Surxondaryo',
+    'jizzax': 'Jizzax',
+    'sirdaryo': 'Sirdaryo',
+    'qoraqalpogiston': "Qoraqalpog'iston",
+    'boshqa': "Boshqa/Noma'lum",
+}
+
+
+async def _show_add_seller_regions(msg, businesses):
+    """Hudud tanlash tugmalarini ko'rsatish"""
+    from .models import detect_region_district
+
+    region_map = {}
+    for i, biz in enumerate(businesses):
+        address = biz.get('address', '')
+        region, _ = detect_region_district(address)
+        if not region:
+            region = 'boshqa'
+        region_map.setdefault(region, []).append(i)
+
+    buttons = [InlineKeyboardButton(
+        f"🌍 Barchasi ({len(businesses)})", callback_data="as_region_all"
+    )]
+    region_buttons = [
+        InlineKeyboardButton(
+            f"📍 {REGION_DISPLAY_NAMES.get(r, r.title())} ({len(idxs)})",
+            callback_data=f"as_region_{r}"
+        )
+        for r, idxs in sorted(region_map.items())
+    ]
+
+    keyboard = [[buttons[0]]]
+    for i in range(0, len(region_buttons), 2):
+        row = region_buttons[i:i+2]
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("❌ Bekor", callback_data="as_cancel")])
+
+    await msg.edit_text(
+        f"➕ <b>Sotuvchi qo'shish</b>\n\n"
+        f"API dan <b>{len(businesses)}</b> ta biznes topildi.\n"
+        f"Hudud (region) bo'yicha filtrlang:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def _show_add_seller_businesses(query, businesses, region_filter=None, page=0):
+    """Tanlangan hudud bizneslarini raqamli ro'yxat + raqam tugmalari bilan ko'rsatish"""
+    from .models import Seller, detect_region_district
+
+    ITEMS_PER_PAGE = 10
+
+    if region_filter and region_filter != 'all':
+        filtered = []
+        for i, biz in enumerate(businesses):
+            addr = biz.get('address', '')
+            region, _ = detect_region_district(addr)
+            if not region:
+                region = 'boshqa'
+            if region == region_filter:
+                filtered.append((i, biz))
+    else:
+        filtered = list(enumerate(businesses))
+
+    if not filtered:
+        await query.edit_message_text("❌ Bu hududda bizneslar topilmadi.")
+        return
+
+    existing_phones = {s.business_phone for s in Seller.filter(is_active=True) if s.business_phone}
+
+    total = len(filtered)
+    total_pages = (total + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+    start = page * ITEMS_PER_PAGE
+    end = min(start + ITEMS_PER_PAGE, total)
+    page_items = filtered[start:end]
+
+    region_name = REGION_DISPLAY_NAMES.get(region_filter, 'Barchasi') if region_filter else 'Barchasi'
+
+    # Matn: raqamli ro'yxat
+    text = f"➕ <b>Biznes tanlang</b> — {region_name}\n"
+    if total_pages > 1:
+        text += f"📄 Sahifa: {page + 1}/{total_pages}\n"
+    text += f"\n<i>✅ = allaqachon qo'shilgan</i>\n\n"
+
+    for display_num, (idx, biz) in enumerate(page_items, start + 1):
+        name = biz.get('title', 'Nomsiz')
+        phone = biz.get('phone', '')
+        address = biz.get('address', '')
+        status = "✅" if phone in existing_phones else "⚠️"
+        text += f"{status} <b>{display_num}. {name}</b>\n"
+        if phone:
+            text += f"    📞 {phone}\n"
+        if address:
+            text += f"    📍 {address}\n"
+        text += "\n"
+
+    # Raqam tugmalari (1-10)
+    num_buttons = [
+        InlineKeyboardButton(str(display_num), callback_data=f"as_biz_{idx}")
+        for display_num, (idx, _) in enumerate(page_items, start + 1)
+    ]
+    keyboard = [num_buttons[i:i+5] for i in range(0, len(num_buttons), 5)]
+
+    # Pagination
+    if total_pages > 1:
+        pag = []
+        rf = region_filter or 'all'
+        if page > 0:
+            pag.append(InlineKeyboardButton("⬅️", callback_data=f"as_page_{rf}_{page - 1}"))
+        pag.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="as_noop"))
+        if page < total_pages - 1:
+            pag.append(InlineKeyboardButton("➡️", callback_data=f"as_page_{rf}_{page + 1}"))
+        keyboard.append(pag)
+
+    keyboard.append([InlineKeyboardButton("◀️ Orqaga", callback_data="as_back_regions")])
+    keyboard.append([InlineKeyboardButton("❌ Bekor", callback_data="as_cancel")])
+
+    await query.edit_message_text(
+        text,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 async def add_seller(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if not await is_admin(user.id):
         return
 
-    args = context.args
+    msg = await update.message.reply_text("🔄 Nonbor API dan bizneslar yuklanmoqda...")
 
-    if len(args) < 2:
-        await update.message.reply_text(
-            "➕ <b>Sotuvchi qo'shish</b>\n\n"
-            "📝 <b>Format:</b>\n"
-            "<code>/add_seller +998XXXXXXXXX Ism Familya</code>\n\n"
-            "📌 <b>Misol:</b>\n"
-            "<code>/add_seller +998901234567 Ali Valiyev</code>",
+    businesses = await fetch_businesses_from_api()
+
+    if not businesses:
+        await msg.edit_text(
+            "❌ <b>API dan bizneslar olinmadi.</b>\n\n"
+            "EXTERNAL_API_URL va EXTERNAL_API_SECRET ni tekshiring.",
             parse_mode='HTML'
         )
         return
 
-    phone = args[0]
-    full_name = ' '.join(args[1:])
-
-    if not re.match(r'^\+998\d{9}$', phone):
-        await update.message.reply_text(
-            "❌ <b>Noto'g'ri telefon formati!</b>\n\n"
-            "✅ To'g'ri format: <code>+998901234567</code>",
-            parse_mode='HTML'
-        )
-        return
-
-    from .models import Seller
-
-    existing = Seller.get(phone=phone)
-    if existing:
-        await update.message.reply_text(
-            f"⚠️ <b>Bu telefon allaqachon mavjud!</b>\n\n"
-            f"👤 Sotuvchi: {existing.full_name}\n"
-            f"🆔 ID: <code>{existing.id}</code>",
-            parse_mode='HTML'
-        )
-        return
-
-    seller = Seller(
-        phone=phone,
-        full_name=full_name,
-        telegram_user_id=str(user.id),
-        group_chat_id="",
-        is_active=True
-    )
-    seller.save()
-
-    await update.message.reply_text(
-        f"✅ <b>Sotuvchi muvaffaqiyatli qo'shildi!</b>\n\n"
-        f"👤 <b>Ism:</b> {full_name}\n"
-        f"📞 <b>Telefon:</b> {phone}\n"
-        f"🆔 <b>ID:</b> <code>{seller.id}</code>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📌 <b>Keyingi qadam:</b>\n"
-        f"Guruh chat ID qo'shish:\n"
-        f"<code>/set_group {seller.id} CHAT_ID</code>\n\n"
-        f"💡 Chat ID olish uchun guruhda /get_chat_id yozing",
-        parse_mode='HTML'
-    )
+    context.user_data['as_businesses'] = businesses
+    await _show_add_seller_regions(msg, businesses)
 
 
 async def set_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -445,13 +581,9 @@ async def list_sellers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sellers = Seller.filter(is_active=True)
 
     if not sellers:
-        keyboard = [[InlineKeyboardButton("➕ Sotuvchi qo'shish", callback_data="menu_add_seller")]]
         await update.message.reply_text(
-            "📭 <b>Hozircha sotuvchilar yo'q</b>\n\n"
-            "Yangi sotuvchi qo'shish uchun tugmani bosing yoki:\n"
-            "<code>/add_seller +998XXXXXXXXX Ism</code>",
-            parse_mode='HTML',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "📭 <b>Hozircha sotuvchilar yo'q</b>",
+            parse_mode='HTML'
         )
         return
 
@@ -598,6 +730,80 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'channel': '📢 Kanal'
     }
 
+    # Guruhda yozilgan va admin guruh ulashni kutayotgan bo'lsa — avtomatik ulash
+    if chat.type in ('group', 'supergroup'):
+        # Admin guruhini ulash
+        if context.user_data.get('waiting_admin_group') and await is_admin(user.id):
+            from .models import AdminSettings
+            AdminSettings.set_admin_group(chat.id, chat.title or "")
+            context.user_data.pop('waiting_admin_group', None)
+
+            await update.message.reply_text(
+                f"✅ <b>Admin guruh ulandi!</b>\n\n"
+                f"👥 <b>Guruh:</b> {chat.title}\n"
+                f"🆔 <b>Guruh ID:</b> <code>{chat.id}</code>",
+                parse_mode='HTML'
+            )
+            keyboard = [
+                [InlineKeyboardButton("⚙️ Sozlamalarga qaytish", callback_data="admin_settings")]
+            ]
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"✅ <b>Admin guruh ulandi!</b>\n\n"
+                         f"👥 <b>Guruh:</b> {chat.title}\n"
+                         f"🆔 <b>Guruh ID:</b> <code>{chat.id}</code>\n\n"
+                         f"Endi barcha buyurtmalar bu guruhga ham yuboriladi.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception:
+                pass
+            return
+
+        seller_id = context.user_data.get('waiting_group_id')
+        if seller_id and await is_admin(user.id):
+            from .models import Seller
+            seller = Seller.get(id=seller_id)
+            if seller:
+                seller.group_chat_id = str(chat.id)
+                seller.group_title = chat.title or ""
+                try:
+                    chat_info = await context.bot.get_chat(chat.id)
+                    if chat_info.invite_link:
+                        seller.group_invite_link = chat_info.invite_link
+                except Exception:
+                    pass
+                seller.save()
+                context.user_data.pop('waiting_group_id', None)
+
+                await update.message.reply_text(
+                    f"✅ <b>Guruh muvaffaqiyatli ulandi!</b>\n\n"
+                    f"👤 <b>Sotuvchi:</b> {seller.full_name}\n"
+                    f"👥 <b>Guruh:</b> {chat.title}\n"
+                    f"🆔 <b>Guruh ID:</b> <code>{chat.id}</code>",
+                    parse_mode='HTML'
+                )
+
+                keyboard = [
+                    [InlineKeyboardButton("🧪 Test xabar yuborish", callback_data=f"testorder_{seller.id}")],
+                    [InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")]
+                ]
+                try:
+                    await context.bot.send_message(
+                        chat_id=user.id,
+                        text=f"✅ <b>Guruh ulandi!</b>\n\n"
+                             f"👤 <b>Sotuvchi:</b> {seller.full_name}\n"
+                             f"👥 <b>Guruh:</b> {chat.title}\n"
+                             f"🆔 <b>Guruh ID:</b> <code>{chat.id}</code>\n\n"
+                             f"Test buyurtma yuborish uchun tugmani bosing.",
+                        parse_mode='HTML',
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                except Exception:
+                    pass
+                return
+
     await update.message.reply_text(
         f"📍 <b>Chat ma'lumotlari</b>\n\n"
         f"🆔 <b>Chat ID:</b> <code>{chat.id}</code>\n"
@@ -729,12 +935,43 @@ async def handle_group_id_message(update: Update, context: ContextTypes.DEFAULT_
     if not await is_admin(update.effective_user.id):
         return False
 
-    # Tekshirish: foydalanuvchi guruh ID kutayaptimi?
+    text = update.message.text.strip() if update.message.text else ""
+
+    # Admin guruh ID kutilayotgan bo'lsa (menyu orqali boshlangan)
+    if context.user_data.get('waiting_admin_group'):
+        if not text.lstrip('-').isdigit():
+            await update.message.reply_text(
+                "❌ <b>Noto'g'ri format!</b>\n\nGuruh ID manfiy raqam bo'lishi kerak.\nMasalan: <code>-1001234567890</code>",
+                parse_mode='HTML'
+            )
+            return True
+        from .models import AdminSettings
+        try:
+            chat = await context.bot.get_chat(int(text))
+            title = chat.title or ""
+        except Exception:
+            await update.message.reply_text(
+                "❌ <b>Bot bu guruhda emas!</b>\n\nAvval botni guruhga qo'shing, so'ng ID yuboring.",
+                parse_mode='HTML'
+            )
+            return True
+        AdminSettings.set_admin_group(int(text), title)
+        context.user_data.pop('waiting_admin_group', None)
+        keyboard = [[InlineKeyboardButton("⚙️ Sozlamalarga qaytish", callback_data="admin_settings")]]
+        await update.message.reply_text(
+            f"✅ <b>Admin guruh ulandi!</b>\n\n"
+            f"👥 <b>Guruh:</b> {title}\n"
+            f"🆔 <b>Guruh ID:</b> <code>{text}</code>\n\n"
+            f"Endi barcha buyurtmalar bu guruhga ham yuboriladi.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return True
+
+    # Tekshirish: foydalanuvchi seller guruh ID kutayaptimi?
     seller_id = context.user_data.get('waiting_group_id')
     if not seller_id:
         return False
-
-    text = update.message.text.strip()
 
     # Guruh ID formatini tekshirish (odatda manfiy raqam)
     if not text.lstrip('-').isdigit():
@@ -900,7 +1137,7 @@ async def handle_group_phone_message(update: Update, context: ContextTypes.DEFAU
 
     # Nonbor API'dan biznes ma'lumotlarini olish
     try:
-        api_url = os.getenv('EXTERNAL_API_URL', 'https://test.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
+        api_url = os.getenv('EXTERNAL_API_URL', 'https://prod.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
 
         found_business = None
         api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
