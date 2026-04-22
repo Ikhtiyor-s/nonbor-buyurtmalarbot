@@ -59,14 +59,6 @@ async def check_missed_orders_job(context):
         logger.error(f"Missed orders check error: {e}")
 
 
-async def call_sellers_job(context):
-    """Qabul qilinmagan buyurtmalar uchun Asterisk AMI orqali qo'ng'iroq"""
-    from .core import check_and_call_sellers
-    try:
-        await check_and_call_sellers()
-    except Exception as e:
-        logger.error(f"Call sellers error: {e}")
-
 
 async def sync_businesses_job(context):
     """Nonbor API dan bizneslarni sellers.json ga sync qilish"""
@@ -302,17 +294,7 @@ def run_bot():
     )
     print("\nMissed orders alert faollashtirildi (har 5 sek tekshiriladi)")
 
-    # Asterisk AMI qo'ng'iroq (har 15 sekundda tekshiriladi)
-    retry_interval = int(os.getenv('RETRY_INTERVAL', 30))
-    job_queue.run_repeating(
-        call_sellers_job,
-        interval=15,
-        first=20,
-        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 15}
-    )
-    print(f"\nAsterisk AMI autodialer faollashtirildi (har 15 sek tekshiriladi, retry={retry_interval}s)")
-
-    # Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
+# Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
     job_queue.run_repeating(
         sync_businesses_job,
         interval=300,

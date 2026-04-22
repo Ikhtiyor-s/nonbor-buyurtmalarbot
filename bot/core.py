@@ -10,10 +10,6 @@ ALERT_TRACKER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'aler
 SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summary_msg.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
 
-# Asterisk autodialer sozlamalari
-WAIT_BEFORE_CALL = int(os.getenv('WAIT_BEFORE_CALL', 90))       # sekund
-MAX_CALL_ATTEMPTS = int(os.getenv('MAX_CALL_ATTEMPTS', 2))
-RETRY_INTERVAL = int(os.getenv('RETRY_INTERVAL', 30))            # sekund
 
 
 def _load_alert_tracker():
@@ -250,9 +246,12 @@ class NotificationBot:
 
             items_text += f"  • {item.get('name', 'Nomalum')}\n"
             if quantity > 1:
-                items_text += f"    {quantity} x {item.get('price', 0):,} = {item_total:,} som\n"
+                price_k = int(item.get('price', 0)) // 100
+                total_k = int(item_total) // 100
+                items_text += f"    {quantity} x {price_k:,} = {total_k:,} so'm\n".replace(",", " ")
             else:
-                items_text += f"    {item.get('price', 0):,} som\n"
+                price_k = int(item.get('price', 0)) // 100
+                items_text += f"    {price_k:,} so'm\n".replace(",", " ")
 
         customer = order_data.get('customer', {})
         delivery_address = order_data.get('delivery_address', '')
@@ -268,7 +267,7 @@ class NotificationBot:
 
 📋 <b>Mahsulotlar ({total_items} ta):</b>
 {items_text}
-💰 <b>Jami:</b> {order_data.get('total', 0):,} som
+💰 <b>Jami:</b> {int(order_data.get('total', 0)) // 100:,} so'm
 
 ━━━━━━━━━━━━━━━━━━━━
 👤 <b>Mijoz:</b> {name_display}
@@ -692,7 +691,7 @@ async def cleanup_expired_orders():
         logger.error(f"Error cleaning up expired orders: {e}")
 
 
-def _format_missed_alert(seller, missed_orders, call_count=0):
+def _format_missed_alert(seller, missed_orders):
     """Admin guruhiga yuboriladigan alert xabari"""
     count = len(missed_orders)
     total_sum = sum(o.total_amount for o in missed_orders)
@@ -711,7 +710,7 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
             items_text += (
                 f"   Mahsulot: {item.get('name', '?')}\n"
                 f"   Miqdor: {item.get('quantity', 1)} ta\n"
-                f"   Narx: {item.get('price', 0):,} so'm\n"
+                f"   Narx: {int(item.get('price', 0)) // 100:,} so'm\n"
             )
         lines.append(
             f"{i}. Buyurtma <b>#{o.external_id}</b>\n"
@@ -721,13 +720,11 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
         )
     crm_url = os.getenv('CRM_ORDERS_URL', '')
     crm_line = f"\n📱 Buyurtmalarni ko'rish ({crm_url})" if crm_url else ""
-    call_line = f"📞 {call_count} marta qo'ng'iroq qilindi.\n" if call_count > 0 else ""
     lines.append(
         f"\n<b>━━━━━━━━━━━━━━━━━━━━━</b>\n"
         f"📦 Jami: <b>{count} ta buyurtma</b>\n"
-        f"💰 Umumiy: <b>{total_sum:,} so'm</b>\n\n"
+        f"💰 Umumiy: <b>{int(total_sum) // 100:,} so'm</b>\n\n"
         f"❌ Buyurtmalarni qabul qilmayapti!\n"
-        f"{call_line}"
         f"🔴 Zudlik bilan bog'laning!"
         f"{crm_line}"
     )
@@ -754,93 +751,6 @@ async def clear_seller_alert(seller_id, bot):
         logger.warning(f"clear_seller_alert error: {e}")
 
 
-async def check_and_call_sellers():
-    """WAIT_BEFORE_CALL sekunddan keyin sotuvchiga Asterisk AMI orqali qo'ng'iroq qilish"""
-    from .models import Seller, Order
-    from .services.asterisk import ami_make_call
-
-    now = datetime.now()
-    call_threshold = timedelta(seconds=WAIT_BEFORE_CALL)
-    all_orders = Order.load_all()
-    tracker = _load_alert_tracker()
-    tracker_updated = False
-
-    # Seller bo'yicha kutilayotgan buyurtmalarni guruhlash
-    seller_orders: dict = {}
-    for od in all_orders:
-        if od.get('status') != 'new':
-            continue
-        notified_at = od.get('notified_at')
-        if not notified_at:
-            continue
-        try:
-            t = datetime.fromisoformat(notified_at)
-        except ValueError:
-            continue
-        if now - t < call_threshold:
-            continue
-        sid = od.get('seller_id', '')
-        seller_orders.setdefault(sid, []).append(od)
-
-    for seller_id, orders in seller_orders.items():
-        seller = Seller.get(id=seller_id)
-        if not seller or not seller.phone:
-            continue
-
-        entry = tracker.get(str(seller_id), {})
-        call_count = entry.get('call_count', 0)
-        last_call_at = entry.get('last_call_at')
-
-        # MAX urinishga yetgan bo'lsa o'tkazib yuborish
-        if call_count >= MAX_CALL_ATTEMPTS:
-            continue
-
-        # Retry interval tekshirish
-        if last_call_at:
-            try:
-                elapsed = (now - datetime.fromisoformat(last_call_at)).total_seconds()
-                if elapsed < RETRY_INTERVAL:
-                    continue
-            except ValueError:
-                pass
-
-        # Qo'ng'iroq qilish
-        logger.info(f"Qo'ng'iroq qilinmoqda: {seller.full_name} ({seller.phone}), urinish #{call_count + 1}")
-        success = await ami_make_call(seller.phone)
-
-        if success:
-            call_count += 1
-            tracker.setdefault(str(seller_id), {})
-            tracker[str(seller_id)]['call_count'] = call_count
-            tracker[str(seller_id)]['last_call_at'] = now.isoformat()
-            tracker_updated = True
-            logger.info(f"Qo'ng'iroq muvaffaqiyatli: {seller.full_name}, jami: {call_count} ta")
-
-            # Agar admin alerti yuborilgan bo'lsa — xabarni yangilash
-            if tracker[str(seller_id)].get('message_id') and tracker[str(seller_id)].get('chat_id'):
-                try:
-                    from .models import AdminSettings
-                    admin_group_id = AdminSettings.get_admin_group_chat_id()
-                    if admin_group_id:
-                        missed = [Order.from_dict(o) for o in orders]
-                        alert_text = _format_missed_alert(seller, missed, call_count=call_count)
-                        bot = NotificationBot().bot
-                        await bot.edit_message_text(
-                            chat_id=int(tracker[str(seller_id)]['chat_id']),
-                            message_id=int(tracker[str(seller_id)]['message_id']),
-                            text=alert_text,
-                            parse_mode='HTML'
-                        )
-                except TelegramError as e:
-                    if 'message is not modified' not in str(e).lower():
-                        logger.warning(f"Alert yangilashda xato: {e}")
-                except Exception as e:
-                    logger.warning(f"Alert yangilashda xato: {e}")
-        else:
-            logger.warning(f"Qo'ng'iroq muvaffaqiyatsiz: {seller.full_name} ({seller.phone})")
-
-    if tracker_updated:
-        _save_alert_tracker(tracker)
 
 
 async def check_missed_orders():
@@ -885,18 +795,15 @@ async def check_missed_orders():
             seller = SellerModel(id=seller_id, full_name='Noma\'lum biznes', phone='')
 
         old_entry = tracker.get(str(seller_id))
-        call_count = old_entry.get('call_count', 0) if old_entry else 0
         order_count = len(missed)
 
-        # Faqat o'zgarish bo'lsa yangilash
         prev_order_count = old_entry.get('order_count', -1) if old_entry else -1
-        prev_call_count = old_entry.get('call_count', -1) if old_entry else -1
-        content_changed = (prev_order_count != order_count or prev_call_count != call_count)
+        content_changed = (prev_order_count != order_count)
 
         if old_entry and old_entry.get('chat_id') and old_entry.get('message_id'):
             if not content_changed:
-                continue  # Hech narsa o'zgarmagan — API chaqirmaymiz
-            alert_text = _format_missed_alert(seller, missed, call_count=call_count)
+                continue
+            alert_text = _format_missed_alert(seller, missed)
             try:
                 await bot.edit_message_text(
                     chat_id=int(old_entry['chat_id']),
@@ -905,7 +812,6 @@ async def check_missed_orders():
                     parse_mode='HTML'
                 )
                 tracker[str(seller_id)]['order_count'] = order_count
-                tracker[str(seller_id)]['call_count'] = call_count
                 tracker_updated = True
                 continue
             except TelegramError as e:
@@ -914,7 +820,7 @@ async def check_missed_orders():
                 tracker.pop(str(seller_id), None)
 
         # Yangi alert yuborish (birinchi marta yoki xabar o'chirilgan)
-        alert_text = _format_missed_alert(seller, missed, call_count=call_count)
+        alert_text = _format_missed_alert(seller, missed)
         try:
             msg = await bot.send_message(
                 chat_id=int(admin_group_id),
@@ -925,16 +831,20 @@ async def check_missed_orders():
                 'message_id': msg.message_id,
                 'chat_id': int(admin_group_id),
                 'order_count': order_count,
-                'call_count': call_count,
             }
             tracker_updated = True
             logger.info(f"Missed order alert sent: {seller.full_name} ({order_count} orders)")
         except Exception as e:
             logger.error(f"Failed to send missed order alert: {e}")
 
-    # Endi missed bo'lmagan sellerlarning alertlarini o'chirish
+    # Faqat 'new' orderlari yo'q sellerlarning alertlarini o'chirish
+    active_seller_ids = {
+        od.get('seller_id', '')
+        for od in all_orders
+        if od.get('status') == 'new' and od.get('seller_id')
+    }
     for seller_id in list(tracker.keys()):
-        if seller_id not in seller_missed:
+        if seller_id not in active_seller_ids:
             entry = tracker[seller_id]
             if entry.get('chat_id') and entry.get('message_id'):
                 try:

@@ -1116,7 +1116,7 @@ async def show_stats(query, period="all"):
         f"    ❌ Rad etilgan: {rejected_orders} ta\n"
         f"    ⏳ Kutilmoqda: {pending_orders} ta\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>Jami summa:</b> {total_amount:,.0f} so'm".replace(",", " "),
+        f"💰 <b>Jami summa:</b> {int(total_amount) // 100:,} so'm".replace(",", " "),
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -1285,21 +1285,15 @@ async def show_edit_seller_menu(query, seller_id):
         await query.answer("Sotuvchi topilmadi!", show_alert=True)
         return
 
-    # Guruh ulangan bo'lsa, phone + delete + back ni juftlab joylashtirish
     if seller.group_chat_id:
         keyboard = [
-            [
-                InlineKeyboardButton("📞 Telefon o'zgartirish", callback_data=f"edit_phone|{seller_id}"),
-                InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")
-            ],
+            [InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")],
             [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
         ]
     else:
         keyboard = [
-            [
-                InlineKeyboardButton("📞 Telefon o'zgartirish", callback_data=f"edit_phone|{seller_id}"),
-                InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")
-            ]
+            [InlineKeyboardButton("👥 Guruh ulash", callback_data=f"setgroup_{seller_id}")],
+            [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
         ]
 
     # Guruh ma'lumotlari
@@ -1799,18 +1793,18 @@ async def show_seller_stats(query, seller_id):
         f"    Buyurtmalar: {daily_total} ta\n"
         f"    ✅ Qabul: {daily_accepted} ta\n"
         f"    ❌ Rad: {daily_rejected} ta\n"
-        f"    💰 Summa: {daily_amount:,.0f} so'm\n\n".replace(",", " ") +
+        f"    💰 Summa: {int(daily_amount) // 100:,} so'm\n\n".replace(",", " ") +
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📆 <b>Shu oy:</b>\n"
         f"    Buyurtmalar: {monthly_total} ta\n"
         f"    ✅ Qabul: {monthly_accepted} ta\n"
         f"    ❌ Rad: {monthly_rejected} ta\n"
-        f"    💰 Summa: {monthly_amount:,.0f} so'm\n\n".replace(",", " ") +
+        f"    💰 Summa: {int(monthly_amount) // 100:,} so'm\n\n".replace(",", " ") +
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📊 <b>Umumiy:</b>\n"
         f"    Jami buyurtmalar: {total_orders} ta\n"
         f"    ✅ Qabul qilingan: {total_accepted} ta\n"
-        f"    💰 Jami summa: {total_amount:,.0f} so'm".replace(",", " ")
+        f"    💰 Jami summa: {int(total_amount) // 100:,} so'm".replace(",", " ")
     )
 
     try:
@@ -2067,13 +2061,13 @@ STATUS_GROUPS = {
     "new":      ("⏳ Jarayonda",  ["new"]),
     "accepted": ("✅ Qabul",      ["accepted", "ready", "delivering", "completed"]),
     "rejected": ("❌ Bekor",      ["rejected", "cancelled"]),
-    "expired":  ("⌛ Muddati o'tgan", ["expired"]),
+    "expired":  ("🕐 Muddati o'tgan", ["expired"]),
 }
 
 STATUS_ICONS = {
     'new': '⏳', 'accepted': '✅', 'ready': '🍽',
     'delivering': '🛵', 'completed': '✅',
-    'rejected': '❌', 'cancelled': '❌', 'expired': '⌛'
+    'rejected': '❌', 'cancelled': '❌', 'expired': '🕐'
 }
 
 
@@ -2175,7 +2169,7 @@ async def show_orders_list(query, period="daily", status="all", page=0):
             s = Seller.get(id=seller_id)
             sellers_cache[seller_id] = (s.full_name[:14] if s else '—')
         biz = sellers_cache[seller_id]
-        amt_str = f"{int(total_amt):,}".replace(",", " ")
+        amt_str = f"{int(total_amt) // 100:,}".replace(",", " ")
         text += f"{i}. {icon} <b>#{ext_id}</b> | {biz}\n"
         text += f"    👤 {name} | 💰 {amt_str} so'm\n"
 
@@ -2254,7 +2248,7 @@ async def show_scheduled_list(query, period="daily", status="all", page=0):
             s = Seller.get(id=seller_id)
             sellers_cache[seller_id] = (s.full_name[:14] if s else '—')
         biz = sellers_cache[seller_id]
-        amt_str = f"{int(total_amt):,}".replace(",", " ")
+        amt_str = f"{int(total_amt) // 100:,}".replace(",", " ")
         text += f"{i}. {icon} <b>#{ext_id}</b> | {biz}\n"
         text += f"    👤 {name} | 💰 {amt_str} so'm\n"
 
@@ -2451,7 +2445,7 @@ async def search_order_by_id(order_id: str, query_or_update, context):
             'completed': ('✅', 'Yakunlandi'),
             'rejected': ('❌', 'Rad etildi'),
             'cancelled': ('❌', 'Bekor qilindi'),
-            'expired': ('⌛', 'Muddati o\'tdi')
+            'expired': ('🕐', 'Muddati o\'tdi')
         }
         status_emoji, status_name = status_map.get(order.status, ('❓', order.status))
 
@@ -2485,7 +2479,7 @@ async def search_order_by_id(order_id: str, query_or_update, context):
 
         customer = order.customer_name or "Noma'lum"
         customer_ph = order.customer_phone or "Ko'rsatilmagan"
-        amount_str = f"{order.total_amount:,}".replace(",", " ")
+        amount_str = f"{int(order.total_amount) // 100:,}".replace(",", " ")
         message += (
             f"\n━━━━━━━━━━━━━━━━━━━━\n"
             f"👤 <b>Mijoz:</b> {customer}\n"
