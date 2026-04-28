@@ -406,8 +406,8 @@ async def _process_single_order(order: dict) -> bool:
         return False
 
     state = (order.get('state') or '').upper()
-    NEW_ORDER_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
-    if state and state not in NEW_ORDER_STATES:
+    # Faqat CHECKING holatidagi buyurtmalar ishlanadi
+    if state != 'CHECKING':
         sent_orders.add(order_id)
         return False
 
@@ -796,14 +796,16 @@ async def check_missed_orders():
 
         old_entry = tracker.get(str(seller_id))
         order_count = len(missed)
+        call_count = old_entry.get('call_count', 0) if old_entry else 0
 
         prev_order_count = old_entry.get('order_count', -1) if old_entry else -1
-        content_changed = (prev_order_count != order_count)
+        prev_call_count = old_entry.get('call_count', -1) if old_entry else -1
+        content_changed = (prev_order_count != order_count or prev_call_count != call_count)
 
         if old_entry and old_entry.get('chat_id') and old_entry.get('message_id'):
             if not content_changed:
                 continue
-            alert_text = _format_missed_alert(seller, missed)
+            alert_text = _format_missed_alert(seller, missed, call_count=call_count)
             try:
                 await bot.edit_message_text(
                     chat_id=int(old_entry['chat_id']),
@@ -820,7 +822,7 @@ async def check_missed_orders():
                 tracker.pop(str(seller_id), None)
 
         # Yangi alert yuborish (birinchi marta yoki xabar o'chirilgan)
-        alert_text = _format_missed_alert(seller, missed)
+        alert_text = _format_missed_alert(seller, missed, call_count=call_count)
         try:
             msg = await bot.send_message(
                 chat_id=int(admin_group_id),
@@ -831,6 +833,7 @@ async def check_missed_orders():
                 'message_id': msg.message_id,
                 'chat_id': int(admin_group_id),
                 'order_count': order_count,
+                'call_count': call_count,
             }
             tracker_updated = True
             logger.info(f"Missed order alert sent: {seller.full_name} ({order_count} orders)")
