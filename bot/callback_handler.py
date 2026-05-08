@@ -2909,8 +2909,17 @@ async def show_admin_stats(query, period="daily"):
     # telegram'siz - expired yoki source='no_telegram'
     no_telegram_orders = len([o for o in filtered_orders if o.get('status') == 'expired' or o.get('source') == 'no_telegram'])
 
-    # Qo'ng'iroqlar soni (hozircha 0)
-    calls_count = 0
+    # Qo'ng'iroqlar soni — call_log.json dan
+    from bot.core import _load_call_log
+    all_call_log = _load_call_log()
+    if period_start:
+        period_calls = [c for c in all_call_log
+                        if c.get('called_at', '') >= period_start.isoformat()]
+    else:
+        period_calls = all_call_log
+    calls_count = len(period_calls)
+    calls_answered = sum(1 for c in period_calls if c.get('success'))
+    calls_missed = calls_count - calls_answered
 
     # Reja buyurtmalar soni (hozircha 0)
     scheduled_count = 0
@@ -2927,7 +2936,7 @@ async def show_admin_stats(query, period="daily"):
         f"    ❌ bekor: {rejected_orders}\n"
         f"    📵 telegram'siz: {no_telegram_orders}\n"
         f"    ⏳ jarayondagi: {pending_orders}\n\n"
-        f"📞 <b>QO'NG'IROQLAR:</b> {calls_count}\n\n"
+        f"📞 <b>QO'NG'IROQLAR:</b> {calls_count} ta | ✅ {calls_answered} | ❌ {calls_missed}\n\n"
         f"📅 <b>REJA BUYURTMALAR:</b> {scheduled_count}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📆 <b>Davr:</b> {date_range}"
