@@ -298,7 +298,9 @@ class Order:
                  customer_name='', customer_phone='', total_amount=0,
                  items=None, telegram_message_id='', notified_at=None,
                  created_at=None, updated_at=None, amocrm_lead_id=None,
-                 delivery_address='', delivery_type='delivery'):
+                 delivery_address='', delivery_type='delivery',
+                 order_delivery_method='', payment_method='',
+                 planned_datetime='', source='', seller_name='', **kwargs):
         self.id = id or str(uuid.uuid4())
         self.external_id = external_id
         self.seller_id = seller_id
@@ -311,9 +313,14 @@ class Order:
         self.notified_at = notified_at
         self.created_at = created_at or datetime.now().isoformat()
         self.updated_at = updated_at or datetime.now().isoformat()
-        self.amocrm_lead_id = amocrm_lead_id  # AmoCRM lead ID (status yangilash uchun)
-        self.delivery_address = delivery_address  # Yetkazib berish manzili
-        self.delivery_type = delivery_type  # 'pickup' yoki 'delivery'
+        self.amocrm_lead_id = amocrm_lead_id
+        self.delivery_address = delivery_address
+        self.delivery_type = delivery_type
+        self.order_delivery_method = order_delivery_method
+        self.payment_method = payment_method
+        self.planned_datetime = planned_datetime
+        self.source = source
+        self.seller_name = seller_name
 
     def to_dict(self):
         return {
@@ -331,9 +338,14 @@ class Order:
             'updated_at': self.updated_at,
             'amocrm_lead_id': self.amocrm_lead_id,
             'delivery_address': self.delivery_address,
-            'delivery_type': self.delivery_type
+            'delivery_type': self.delivery_type,
+            'order_delivery_method': self.order_delivery_method,
+            'payment_method': self.payment_method,
+            'planned_datetime': self.planned_datetime,
+            'source': self.source,
+            'seller_name': self.seller_name,
         }
-    
+
     @classmethod
     def from_dict(cls, data):
         return cls(**data)

@@ -409,6 +409,42 @@ class NotificationBot:
             phone_display = "Ko'rsatilmagan"
         name_display = customer.get('name', '') or 'Nomalum'
 
+        # Qo'shimcha maydonlar
+        DELIVERY_LABELS = {
+            'DELIVERY': '🚴 Yetkazib berish',
+            'PICKUP': '🏪 Olib ketish',
+        }
+        PAYMENT_LABELS = {
+            'CASH': '💵 Naqd',
+            'CARD': '💳 Karta',
+            'PAYME': '💳 Payme',
+            'CLICK': '💳 Click',
+            'UZUM': '💳 Uzum Bank',
+            'HUMO': '💳 Humo',
+            'UZCARD': '💳 Uzcard',
+        }
+        dm = (order_data.get('delivery_method') or '').upper()
+        pm = (order_data.get('payment_method') or '').upper()
+        delivery_label = DELIVERY_LABELS.get(dm, '')
+        payment_label = PAYMENT_LABELS.get(pm, '')
+        planned = order_data.get('planned_datetime') or ''
+        source = order_data.get('source') or ''
+
+        extra_lines = ''
+        if delivery_label:
+            extra_lines += f"🚚 <b>Yetkazish:</b> {delivery_label}\n"
+        if payment_label:
+            extra_lines += f"💰 <b>To'lov:</b> {payment_label}\n"
+        if planned:
+            try:
+                from datetime import datetime as _dt
+                pt = _dt.fromisoformat(planned[:19])
+                extra_lines += f"📅 <b>Reja:</b> {pt.strftime('%d.%m.%Y %H:%M')}\n"
+            except Exception:
+                extra_lines += f"📅 <b>Reja:</b> {planned}\n"
+        if source:
+            extra_lines += f"📱 <b>Platforma:</b> {source}\n"
+
         message = f"""
 🛍️ <b>YANGI BUYURTMA</b>
 
@@ -423,7 +459,7 @@ class NotificationBot:
 👤 <b>Mijoz:</b> {name_display}
 📞 <b>Telefon:</b> <code>{phone_display}</code>
 📍 <b>Manzil:</b> {delivery_address if delivery_address else "Ko'rsatilmagan"}
-""".replace(",", " ")
+{extra_lines}""".replace(",", " ")
 
         message += "\n⚠️ <i>Faqat menejer qabul/rad qila oladi</i>"
 
@@ -572,14 +608,23 @@ async def _process_single_order(order: dict) -> bool:
 
     business = order.get('business', {}) or {}
     business_name = business.get('title', '')
-    business_phone = business.get('phone', '')
+    business_phone = business.get('phone', '') or business.get('phone_number', '')
+    business_id = str(business.get('id', ''))
 
     sellers = Seller.filter(is_active=True)
     target_seller = None
+    # 1. api_identifier bo'yicha (eng ishonchli)
     for s in sellers:
-        if s.business_phone and s.business_phone == business_phone:
+        if business_id and getattr(s, 'api_identifier', '') == business_id:
             target_seller = s
             break
+    # 2. business_phone bo'yicha
+    if not target_seller:
+        for s in sellers:
+            if s.business_phone and s.business_phone == business_phone:
+                target_seller = s
+                break
+    # 3. full_name bo'yicha
     if not target_seller:
         for s in sellers:
             if s.full_name == business_name:
@@ -626,8 +671,11 @@ async def _process_single_order(order: dict) -> bool:
         delivery.get('address') or delivery.get('address_line') or
         delivery.get('full_address') or order.get('address') or ''
     )
-    delivery_method = (order.get('delivery_method') or 'DELIVERY').upper()
+    delivery_method = (order.get('delivery_method') or '').upper()
     delivery_type = 'pickup' if delivery_method == 'PICKUP' else 'delivery'
+    payment_method = (order.get('payment_method') or '').upper()
+    planned_datetime = order.get('planned_datetime') or order.get('plan') or ''
+    source = order.get('source') or order.get('platform') or order.get('channel') or ''
 
     order_data = {
         'id': order_id,
@@ -640,6 +688,10 @@ async def _process_single_order(order: dict) -> bool:
         'items': items,
         'delivery_address': delivery_address,
         'delivery_type': delivery_type,
+        'delivery_method': delivery_method,
+        'payment_method': payment_method,
+        'planned_datetime': planned_datetime,
+        'source': source,
     }
 
     # Buyurtmani tarixga yozish
@@ -676,6 +728,11 @@ async def _process_single_order(order: dict) -> bool:
                 notified_at=datetime.now().isoformat(),
                 delivery_address=delivery_address,
                 delivery_type=delivery_type,
+                order_delivery_method=order_data.get('delivery_method', ''),
+                payment_method=order_data.get('payment_method', ''),
+                planned_datetime=order_data.get('planned_datetime', ''),
+                source=order_data.get('source', ''),
+                seller_name=business_name,
             )
             new_order.save()
             logger.info(f"Order {order_id} saved (no group, awaiting 3-min alert)")
@@ -876,6 +933,17 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
     )
     lines.append("\n<b>━━━ BUYURTMALAR ━━━</b>\n\n")
     for i, o in enumerate(missed_orders, 1):
+        DELIVERY_LABELS = {'DELIVERY': '🚴 Yetkazib berish', 'PICKUP': '🏪 Olib ketish'}
+        PAYMENT_LABELS = {
+            'CASH': '💵 Naqd', 'CARD': '💳 Karta',
+            'PAYME': '💳 Payme', 'CLICK': '💳 Click',
+            'UZUM': '💳 Uzum Bank', 'HUMO': '💳 Humo', 'UZCARD': '💳 Uzcard',
+        }
+        dm = (getattr(o, 'order_delivery_method', '') or '').upper()
+        pm = (getattr(o, 'payment_method', '') or '').upper()
+        planned = getattr(o, 'planned_datetime', '') or ''
+        source = getattr(o, 'source', '') or ''
+
         items_text = ""
         items_total = 0
         for item in (o.items or []):
@@ -889,15 +957,31 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
             )
         order_total = int(o.total_amount) // 100
         delivery_fee = order_total - items_total
-        delivery_line = f"   🚴 Yetkazib berish: {delivery_fee:,} so'm\n" if delivery_fee > 0 else ""
+        delivery_fee_line = f"   🚴 Yetkazib berish: {delivery_fee:,} so'm\n" if delivery_fee > 0 else ""
+
+        extra = ''
+        if dm and dm in DELIVERY_LABELS:
+            extra += f"   🚚 Yetkazish: {DELIVERY_LABELS[dm]}\n"
+        if pm and pm in PAYMENT_LABELS:
+            extra += f"   💰 To'lov: {PAYMENT_LABELS[pm]}\n"
+        if planned:
+            try:
+                pt = datetime.fromisoformat(planned[:19])
+                extra += f"   📅 Reja: {pt.strftime('%d.%m.%Y %H:%M')}\n"
+            except Exception:
+                extra += f"   📅 Reja: {planned}\n"
+        if source:
+            extra += f"   📱 Platforma: {source}\n"
+
         lines.append(
             f"{i}. Buyurtma <b>#{o.external_id}</b>\n"
             f"   Mijoz: {o.customer_name or '—'}\n"
             f"   Tel: {o.customer_phone or '—'}\n"
             f"{items_text}"
             f"   📦 Mahsulotlar: {items_total:,} so'm\n"
-            f"{delivery_line}"
-            f"   💰 Jami: {order_total:,} so'm\n\n"
+            f"{delivery_fee_line}"
+            f"   💰 Jami: {order_total:,} so'm\n"
+            f"{extra}\n"
         )
     crm_url = os.getenv('CRM_ORDERS_URL', '')
     crm_line = f"\n📱 Buyurtmalarni ko'rish ({crm_url})" if crm_url else ""
@@ -975,7 +1059,9 @@ async def check_missed_orders():
         seller = Seller.get(id=seller_id)
         if not seller:
             from .models import Seller as SellerModel
-            seller = SellerModel(id=seller_id, full_name='Noma\'lum biznes', phone='')
+            # seller_name ni birinchi missed orderdan olish
+            seller_name = getattr(missed[0], 'seller_name', '') if missed else ''
+            seller = SellerModel(id=seller_id, full_name=seller_name or 'Noma\'lum biznes', phone='')
 
         old_entry = tracker.get(str(seller_id))
         order_count = len(missed)
