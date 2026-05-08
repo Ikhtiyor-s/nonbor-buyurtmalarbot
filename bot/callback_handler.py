@@ -237,9 +237,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_stats_config(query)
 
     elif data == "settings_health_config":
+        context.user_data.pop('waiting_stats_field', None)
+        context.user_data.pop('waiting_health_field', None)
         await show_health_config(query)
 
     elif data == "health_edit_phone":
+        context.user_data.pop('waiting_stats_field', None)
         context.user_data['waiting_health_field'] = 'phone'
         keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_health_config")]]
         await query.message.edit_text(
@@ -250,6 +253,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "health_edit_interval":
+        context.user_data.pop('waiting_stats_field', None)
         context.user_data['waiting_health_field'] = 'interval'
         keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_health_config")]]
         await query.message.edit_text(
@@ -270,14 +274,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_health_config(query)
 
     elif data == "stats_edit_period_start":
+        context.user_data.pop('waiting_health_field', None)
         context.user_data['waiting_stats_field'] = 'period_start'
         await ask_stats_time(query, "Statistika <b>boshlanish vaqti</b>ni kiriting\n<i>Masalan: 22:30</i>")
 
     elif data == "stats_edit_period_end":
+        context.user_data.pop('waiting_health_field', None)
         context.user_data['waiting_stats_field'] = 'period_end'
         await ask_stats_time(query, "Statistika <b>tugash vaqti</b>ni kiriting\n<i>Masalan: 08:00</i>")
 
     elif data == "stats_edit_send_time":
+        context.user_data.pop('waiting_health_field', None)
         context.user_data['waiting_stats_field'] = 'send_time'
         await ask_stats_time(query, "Statistika <b>yuborish vaqti</b>ni kiriting\n<i>Masalan: 08:05</i>")
 
