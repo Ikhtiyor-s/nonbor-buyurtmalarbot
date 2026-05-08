@@ -785,14 +785,68 @@ async def fetch_and_send_orders():
         states_found = {o.get('state', '') for o in orders}
         logger.info(f"Orders API: total={total_count}, fetched={len(orders)}, states={states_found}")
 
+        ACTIVE_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
+        # API dagi hozirgi faol order IDlari
+        active_api_ids = {
+            str(o.get('id')) for o in orders
+            if (o.get('state') or '').upper() in ACTIVE_STATES
+        }
+
         for order in orders:
-            # Barcha buyurtmalarni statistika uchun arxivlash (state qanday bo'lishidan qat'i nazar)
             _archive_order_from_api(order)
-            # Faqat CHECKING holatidagilarni guruhga yuborish
             await _process_single_order(order)
+
+        # CHECKING dan chiqib ketgan buyurtmalarning xabarini o'chirish
+        await _delete_finished_order_messages(active_api_ids)
 
     except Exception as e:
         logger.exception(f"Error fetching orders: {e}")
+
+
+async def _delete_finished_order_messages(active_api_ids: set):
+    """
+    API dan CHECKING/PENDING holatida bo'lmagan buyurtmalarning
+    Telegram guruh xabarini avtomatik o'chirish.
+    """
+    from .models import Order, Seller
+
+    all_orders = Order.load_all()
+    bot = NotificationBot().bot
+
+    for od in all_orders:
+        if od.get('status') != 'new':
+            continue
+        ext_id = str(od.get('external_id', ''))
+        if not ext_id or ext_id in active_api_ids:
+            continue
+
+        # Bu order endi API da aktiv emas — xabarni o'chirish
+        msg_id = od.get('telegram_message_id', '0')
+        seller_id = od.get('seller_id', '')
+
+        if msg_id and msg_id != '0':
+            seller = Seller.get(id=seller_id)
+            if seller and seller.group_chat_id:
+                try:
+                    await bot.delete_message(
+                        chat_id=int(seller.group_chat_id),
+                        message_id=int(msg_id)
+                    )
+                    logger.info(f"Order #{ext_id} xabari o'chirildi (CHECKING dan chiqdi)")
+                except TelegramError:
+                    pass
+
+        # Statusni yangilash
+        order_obj = Order.from_dict(od)
+        order_obj.status = 'accepted'
+        order_obj.save()
+        sent_orders.discard(int(ext_id) if ext_id.isdigit() else ext_id)
+
+        # Alert ham o'chirish
+        try:
+            await clear_seller_alert(seller_id, bot)
+        except Exception:
+            pass
 
 
 async def fetch_and_send_amocrm_orders():
