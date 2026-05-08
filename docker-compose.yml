@@ -12,6 +12,7 @@ services:
     environment:
       - DEBUG=False
       - ALLOWED_HOSTS=*
+      - TZ=Asia/Tashkent
     volumes:
       - ./db.sqlite3:/app/db.sqlite3
       - ./bot.log:/app/bot.log
