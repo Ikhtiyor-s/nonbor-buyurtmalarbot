@@ -118,32 +118,41 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
         total = len(daily_orders)
-        accepted = len([o for o in daily_orders if o.get('status') in ['accepted', 'ready', 'delivering', 'completed']])
-        rejected = len([o for o in daily_orders if o.get('status') in ['rejected', 'cancelled']])
-        pending = len([o for o in daily_orders if o.get('status') == 'new'])
+        st = lambda s: len([o for o in daily_orders if o.get('status') == s])
+        accepted   = st('accepted')
+        rejected   = st('rejected') + st('cancelled')
+        expired    = st('expired')
+        new_orders = st('new')
+        completed  = st('completed')
         calls_count = len([o for o in daily_orders if o.get('customer_phone')])
+
+        # AMI qo'ng'iroq statistikasi (bugun)
+        from bot.core import _load_call_log
+        call_log = _load_call_log()
+        today_calls = [c for c in call_log if c.get('called_at', '')[:10] == now.strftime('%Y-%m-%d')]
+        calls_total = len(today_calls)
+        calls_answered = len([c for c in today_calls if c.get('success')])
+        calls_missed = calls_total - calls_answered
 
         from .callback_handler import get_admin_menu_keyboard
         reply_markup = get_admin_menu_keyboard(
             period="daily", orders_count=total,
-            calls_count=calls_count, scheduled_count=0
+            calls_count=calls_total, scheduled_count=0
         )
 
         message = (
-            f"🏳 BUGUNGI HISOBOT\n"
+            f"🏳 <b>BUGUNGI HISOBOT</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📦 <b>BUYURTMALAR:</b> {total} ta\n"
             f"├ ✅ Qabul qilindi: {accepted}\n"
-            f"├ ❌ Bekor qilindi: {rejected}\n"
-            f"├ 🎉 Telegram'siz qabul: 0\n"
-            f"└ 🔄 Jarayondagi: {pending}\n\n"
-            f"📞 <b>QO'NG'IROQLAR:</b> {calls_count} ta\n"
-            f"├ ✅ Javob berildi: {accepted}\n"
-            f"├ ❌ Javob berilmadi: {rejected}\n"
-            f"├ 1️⃣ 1-urinishda: 0\n"
-            f"└ 2️⃣ 2-urinishda: 0\n\n"
-            f"📅 <b>REJA BUYURTMALAR:</b> 0 ta\n\n"
-            f"🗓 Davr: {now.strftime('%Y-%m-%d')} - {now.strftime('%Y-%m-%d')}\n\n"
+            f"├ ❌ Rad etildi: {rejected}\n"
+            f"├ ⏰ Muddati o'tgan: {expired}\n"
+            f"├ 🏁 Yakunlandi: {completed}\n"
+            f"└ ⏳ Kutilmoqda: {new_orders}\n\n"
+            f"📞 <b>QO'NG'IROQLAR:</b> {calls_total} ta\n"
+            f"├ ✅ Javob berdi: {calls_answered}\n"
+            f"└ ❌ Javob bermadi: {calls_missed}\n\n"
+            f"🗓 <b>Sana:</b> {now.strftime('%d.%m.%Y')}\n\n"
             f"<i>Batafsil ko'rish uchun tugmalarni bosing:</i>"
         )
         await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='HTML')
