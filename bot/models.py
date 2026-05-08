@@ -462,6 +462,25 @@ class AdminSettings:
             data['stats_send_time'] = send_time
         cls._save(data)
 
+    @classmethod
+    def get_health_config(cls) -> dict:
+        return {
+            'phone':    cls.get('health_phone', ''),
+            'interval': int(cls.get('health_interval', 10)),
+            'url':      cls.get('health_url', '') or os.getenv('EXTERNAL_API_URL', ''),
+        }
+
+    @classmethod
+    def set_health_config(cls, phone=None, interval=None, url=None):
+        data = cls._load()
+        if phone is not None:
+            data['health_phone'] = phone
+        if interval is not None:
+            data['health_interval'] = int(interval)
+        if url is not None:
+            data['health_url'] = url
+        cls._save(data)
+
 
 class OTPRequest:
     """OTP so'rovi modeli"""

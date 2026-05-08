@@ -236,6 +236,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_stats_config":
         await show_stats_config(query)
 
+    elif data == "settings_health_config":
+        await show_health_config(query)
+
+    elif data == "health_edit_phone":
+        context.user_data['waiting_health_field'] = 'phone'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_health_config")]]
+        await query.message.edit_text(
+            "📞 <b>Ogohlantirish telefon raqami</b>\n\n"
+            "API ishlamay qolsa shu raqamga qo'ng'iroq qilinadi.\n"
+            "Masalan: <code>+998901234567</code>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "health_edit_interval":
+        context.user_data['waiting_health_field'] = 'interval'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_health_config")]]
+        await query.message.edit_text(
+            "⏱ <b>Tekshirish oralig'i (daqiqada)</b>\n\n"
+            "Necha daqiqada bir marta API tekshirilsin?\n"
+            "Masalan: <code>10</code>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "health_check_now":
+        await query.answer("Tekshirilmoqda...", show_alert=False)
+        from .core import check_api_health
+        import bot.core as _core
+        prev = _core._api_health.copy()
+        _core._api_health['last_alert'] = None  # force alert
+        await check_api_health()
+        _core._api_health['last_alert'] = prev.get('last_alert')
+        await show_health_config(query)
+
     elif data == "stats_edit_period_start":
         context.user_data['waiting_stats_field'] = 'period_start'
         await ask_stats_time(query, "Statistika <b>boshlanish vaqti</b>ni kiriting\n<i>Masalan: 22:30</i>")
@@ -2313,6 +2346,7 @@ async def show_admin_settings(query):
         ],
         [
             InlineKeyboardButton("📊 Statistika vaqti", callback_data="settings_stats_config"),
+            InlineKeyboardButton("🌐 API monitoring", callback_data="settings_health_config"),
         ],
     ]
     if admin_group_id:
@@ -2371,6 +2405,80 @@ async def ask_stats_time(query, prompt: str):
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def show_health_config(query):
+    """API health monitoring sozlamalari"""
+    from .models import AdminSettings
+    import bot.core as _core
+
+    cfg = AdminSettings.get_health_config()
+    state = _core._api_health
+    status = "🔴 Ishlamayapti" if state.get('is_down') else "🟢 Ishlayapti"
+    last_ok = state.get('last_ok', '—')
+    if last_ok and last_ok != '—':
+        try:
+            from datetime import datetime
+            last_ok = datetime.fromisoformat(last_ok).strftime('%H:%M:%S')
+        except Exception:
+            pass
+
+    phone_display = cfg['phone'] or '❌ kiritilmagan'
+    keyboard = [
+        [
+            InlineKeyboardButton(f"📞 Raqam: {phone_display}", callback_data="health_edit_phone"),
+        ],
+        [
+            InlineKeyboardButton(f"⏱ Interval: {cfg['interval']} daqiqa", callback_data="health_edit_interval"),
+        ],
+        [
+            InlineKeyboardButton("🔍 Hozir tekshirish", callback_data="health_check_now"),
+            InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
+        ],
+    ]
+    await query.message.edit_text(
+        f"🌐 <b>API Health Monitoring</b>\n\n"
+        f"Holat: {status}\n"
+        f"Oxirgi muvaffaqiyatli: {last_ok}\n\n"
+        f"📞 Ogohlantirish raqami: <b>{phone_display}</b>\n"
+        f"⏱ Tekshirish oralig'i: <b>{cfg['interval']} daqiqa</b>\n"
+        f"🔗 URL: <code>{cfg['url'][:50]}...</code>\n\n"
+        f"<i>API javob bermasa Telegram xabar + AMI qo'ng'iroq.</i>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_health_input(update, context) -> bool:
+    """Health config uchun matn qabul qilish"""
+    field = context.user_data.get('waiting_health_field')
+    if not field:
+        return False
+
+    text = (update.message.text or '').strip()
+    from .models import AdminSettings
+
+    if field == 'phone':
+        if not text.startswith('+') or len(text) < 7:
+            await update.message.reply_text("❌ Raqam + bilan boshlanishi kerak. Masalan: +998901234567")
+            return True
+        AdminSettings.set_health_config(phone=text)
+        context.user_data.pop('waiting_health_field', None)
+        await update.message.reply_text(f"✅ Ogohlantirish raqami saqlandi: <b>{text}</b>", parse_mode='HTML')
+
+    elif field == 'interval':
+        try:
+            mins = int(text)
+            if mins < 1 or mins > 1440:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("❌ 1 dan 1440 gacha son kiriting (daqiqada).")
+            return True
+        AdminSettings.set_health_config(interval=mins)
+        context.user_data.pop('waiting_health_field', None)
+        await update.message.reply_text(f"✅ Tekshirish oralig'i: <b>{mins} daqiqa</b>", parse_mode='HTML')
+
+    return True
 
 
 async def handle_stats_time_input(update, context) -> bool:

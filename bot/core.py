@@ -74,6 +74,14 @@ _last_summary_text = ''
 # Bugun statistika yuborilganmi (ikki marta yuborilmasin)
 _stats_sent_today: str = ''
 
+# API health monitoring holati
+_api_health = {
+    'is_down': False,       # hozir API ishlamayaptimi
+    'down_since': None,     # qachondan beri ishlamayapti
+    'last_alert': None,     # oxirgi ogohlantirish vaqti
+    'last_ok': None,        # oxirgi muvaffaqiyatli so'rov
+}
+
 
 async def update_admin_group_summary():
     """Admin guruhidagi yagona xabarni yangilash — faqat o'zgarish bo'lsa"""
@@ -1130,3 +1138,108 @@ async def generate_and_send_daily_stats():
     if sent:
         _stats_sent_today = today_key
         logger.info(f"Kunlik statistika yuborildi ({total} buyurtma, {period_start_str}-{period_end_str})")
+
+
+async def check_api_health():
+    """API health monitoring: ishlamasa admin va telefonga ogohlantirish"""
+    global _api_health
+    from .models import AdminSettings
+
+    cfg = AdminSettings.get_health_config()
+    url = cfg['url']
+    if not url:
+        return
+
+    now = datetime.now()
+    api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+    headers = {"X-Telegram-Bot-Secret": api_secret}
+
+    success = False
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers=headers) as resp:
+                if resp.status < 500:
+                    success = True
+    except Exception:
+        success = False
+
+    tg_bot = NotificationBot().bot
+    admin_ids = [a.strip() for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()]
+
+    if success:
+        _api_health['last_ok'] = now.isoformat()
+        if _api_health['is_down']:
+            # Tiklandi — xabar yuborish
+            down_since = _api_health.get('down_since')
+            duration = ''
+            if down_since:
+                try:
+                    mins = int((now - datetime.fromisoformat(down_since)).total_seconds() / 60)
+                    duration = f" ({mins} daqiqa)"
+                except Exception:
+                    pass
+            text = f"✅ <b>API tiklandi{duration}</b>\n🔗 {url}"
+            for admin_id in admin_ids:
+                try:
+                    await tg_bot.send_message(chat_id=int(admin_id), text=text, parse_mode='HTML')
+                except TelegramError:
+                    pass
+            logger.info(f"API tiklandi: {url}")
+        _api_health['is_down'] = False
+        _api_health['down_since'] = None
+        _api_health['last_alert'] = None
+        return
+
+    # API ishlamayapti
+    if not _api_health['is_down']:
+        _api_health['is_down'] = True
+        _api_health['down_since'] = now.isoformat()
+
+    # Ogohlantirish: birinchi marta yoki oxirgi ogohlantirishdan 30 daqiqa o'tgan bo'lsa
+    last_alert = _api_health.get('last_alert')
+    should_alert = True
+    if last_alert:
+        try:
+            elapsed = (now - datetime.fromisoformat(last_alert)).total_seconds()
+            if elapsed < 1800:  # 30 daqiqa
+                should_alert = False
+        except Exception:
+            pass
+
+    if not should_alert:
+        return
+
+    _api_health['last_alert'] = now.isoformat()
+    down_since = _api_health.get('down_since', now.isoformat())
+    try:
+        mins = int((now - datetime.fromisoformat(down_since)).total_seconds() / 60)
+        duration = f"{mins} daqiqa" if mins > 0 else "hozirgina"
+    except Exception:
+        duration = "noma'lum"
+
+    text = (
+        f"🚨 <b>API ISHLAMAYAPTI!</b>\n\n"
+        f"🔗 {url}\n"
+        f"⏱ {duration} davomida javob bermayapti\n"
+        f"🕐 {now.strftime('%d.%m.%Y %H:%M')}"
+    )
+
+    # Telegram xabar
+    for admin_id in admin_ids:
+        try:
+            await tg_bot.send_message(chat_id=int(admin_id), text=text, parse_mode='HTML')
+        except TelegramError as e:
+            logger.error(f"Health alert yuborishda xato: {e}")
+
+    # AMI qo'ng'iroq
+    phone = cfg.get('phone', '').strip()
+    if phone:
+        try:
+            from .services.asterisk import ami_make_call
+            await ami_make_call(phone)
+            logger.info(f"Health alert: {phone} ga qo'ng'iroq qilindi")
+        except Exception as e:
+            logger.error(f"Health alert AMI xato: {e}")
+
+    logger.warning(f"API health alert: {url} — {duration} javob bermadi")

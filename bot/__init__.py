@@ -78,6 +78,15 @@ async def daily_stats_job(context):
         logger.error(f"Daily stats error: {e}")
 
 
+async def api_health_job(context):
+    """API health monitoring"""
+    from .core import check_api_health
+    try:
+        await check_api_health()
+    except Exception as e:
+        logger.error(f"API health check error: {e}")
+
+
 async def sync_businesses_job(context):
     """Nonbor API dan bizneslarni sellers.json ga sync qilish"""
     from .core import sync_businesses_from_api
@@ -289,6 +298,9 @@ def run_bot():
         # Statistika vaqt sozlamasi
         if await callback_handler.handle_stats_time_input(update, context):
             return
+        # API health monitoring sozlamasi
+        if await callback_handler.handle_health_input(update, context):
+            return
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
@@ -332,6 +344,17 @@ def run_bot():
         job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
     )
     print("\nKunlik statistika faollashtirildi (har daqiqa tekshiriladi)")
+
+    # API health monitoring
+    from .models import AdminSettings as _AS
+    health_interval = _AS.get_health_config().get('interval', 10) * 60
+    job_queue.run_repeating(
+        api_health_job,
+        interval=health_interval,
+        first=60,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
+    )
+    print(f"\nAPI health monitoring faollashtirildi (har {health_interval // 60} daqiqa)")
 
     # Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
     job_queue.run_repeating(
