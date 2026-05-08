@@ -2286,7 +2286,7 @@ async def show_orders_list(query, period="daily", status="all", page=0):
     text += "\n"
 
     sellers_cache = {}
-    order_buttons = []
+    order_btn_list = []  # flat list of buttons
     for i, o in enumerate(page_items, start_idx + 1):
         icon = STATUS_ICONS.get(o.get('status', ''), '•')
         ext_id = o.get('external_id', o.get('id', '?'))
@@ -2309,18 +2309,19 @@ async def show_orders_list(query, period="daily", status="all", page=0):
         dlv_str = f" + {delivery_fee // 100:,} 🚴".replace(",", " ") if delivery_fee > 0 else ""
         text += f"{i}. {icon} <b>#{ext_id}</b> | {biz}\n"
         text += f"    👤 {name} | 💰 {amt_str} so'm{dlv_str}\n"
-        order_buttons.append([
+        order_btn_list.append(
             InlineKeyboardButton(
-                f"{icon} #{ext_id}",
+                f"{i}",
                 callback_data=f"order_detail_{o.get('id', ext_id)}"
             )
-        ])
+        )
 
     if not page_items:
         text += "<i>Bu davr va filtrda buyurtmalar yo'q</i>\n"
 
+    # 5 tadan qatorlarga joylashtirish
+    order_buttons = [order_btn_list[j:j+5] for j in range(0, len(order_btn_list), 5)]
     nav_keyboard = _orders_keyboard("orders", period, status, page, total_pages)
-    # Order tugmalari + navigatsiya
     full_keyboard = order_buttons + nav_keyboard
     await query.message.edit_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(full_keyboard))
 
