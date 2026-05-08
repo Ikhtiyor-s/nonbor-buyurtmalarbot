@@ -119,9 +119,18 @@ def _archive_order_from_api(order: dict):
 
     state = (order.get('state') or '').upper()
     STATUS_MAP = {
-        'ACCEPTED': 'accepted', 'COMPLETED': 'accepted',
+        # Yangi / aktiv
+        'CHECKING': 'new', 'PENDING': 'new', 'NEW': 'new', 'CREATED': 'new',
+        'CART': 'new',
+        # Qabul qilingan / yakunlangan
+        'ACCEPTED': 'accepted', 'PREPARING': 'accepted',
+        'READY': 'accepted', 'ON_DELIVERY': 'accepted',
+        'DELIVERING': 'accepted', 'COMPLETED': 'accepted',
+        'FINISHED': 'accepted', 'DONE': 'accepted',
+        # Bekor / rad
         'CANCELLED': 'rejected', 'REJECTED': 'rejected',
-        'CHECKING': 'new', 'PENDING': 'new', 'NEW': 'new',
+        'CANCELLED_BY_CLIENT': 'rejected', 'REJECTED_BY_SELLER': 'rejected',
+        'EXPIRED': 'expired', 'PAYMENT_EXPIRED': 'expired',
     }
     status = STATUS_MAP.get(state, 'new')
 
@@ -848,7 +857,7 @@ async def cleanup_expired_orders():
         logger.error(f"Error cleaning up expired orders: {e}")
 
 
-def _format_missed_alert(seller, missed_orders):
+def _format_missed_alert(seller, missed_orders, call_count=0):
     """Admin guruhiga yuboriladigan alert xabari"""
     count = len(missed_orders)
     total_sum = sum(o.total_amount for o in missed_orders)
@@ -877,11 +886,13 @@ def _format_missed_alert(seller, missed_orders):
         )
     crm_url = os.getenv('CRM_ORDERS_URL', '')
     crm_line = f"\n📱 Buyurtmalarni ko'rish ({crm_url})" if crm_url else ""
+    call_line = f"📞 {call_count} marta qo'ng'iroq qilindi.\n" if call_count > 0 else ""
     lines.append(
         f"\n<b>━━━━━━━━━━━━━━━━━━━━━</b>\n"
         f"📦 Jami: <b>{count} ta buyurtma</b>\n"
-        f"💰 Umumiy: <b>{int(total_sum) // 100:,} so'm</b>\n\n"
+        f"💰 Umumiy: <b>{total_sum:,} so'm</b>\n\n"
         f"❌ Buyurtmalarni qabul qilmayapti!\n"
+        f"{call_line}"
         f"🔴 Zudlik bilan bog'laning!"
         f"{crm_line}"
     )
@@ -1176,9 +1187,10 @@ async def _build_and_send_stats(period_start_str: str, period_end_str: str, labe
             continue
 
     total = len(period_orders)
-    accepted = sum(1 for o in period_orders if o.get('status') == 'accepted')
-    rejected = sum(1 for o in period_orders if o.get('status') in ('rejected', 'cancelled'))
-    unanswered = total - accepted - rejected
+    accepted  = sum(1 for o in period_orders if o.get('status') == 'accepted')
+    rejected  = sum(1 for o in period_orders if o.get('status') == 'rejected')
+    expired   = sum(1 for o in period_orders if o.get('status') == 'expired')
+    new_count = sum(1 for o in period_orders if o.get('status') == 'new')
 
     seller_stats: dict = {}
     for od in period_orders:
@@ -1190,15 +1202,13 @@ async def _build_and_send_stats(period_start_str: str, period_end_str: str, labe
                 name = s.full_name if s else sid[:12]
             seller_stats[sid] = {
                 'name': name, 'total': 0,
-                'accepted': 0, 'rejected': 0, 'new': 0,
+                'accepted': 0, 'rejected': 0, 'expired': 0, 'new': 0,
                 'calls': 0, 'calls_success': 0,
             }
         seller_stats[sid]['total'] += 1
         st = od.get('status', 'new')
-        if st == 'accepted':
-            seller_stats[sid]['accepted'] += 1
-        elif st in ('rejected', 'cancelled'):
-            seller_stats[sid]['rejected'] += 1
+        if st in seller_stats[sid]:
+            seller_stats[sid][st] += 1
         else:
             seller_stats[sid]['new'] += 1
 
@@ -1214,10 +1224,11 @@ async def _build_and_send_stats(period_start_str: str, period_end_str: str, labe
     lines = [
         f"📊 <b>{label}</b>\n"
         f"🕐 {date_label}\n\n"
-        f"📦 Jami buyurtmalar: <b>{total} ta</b>\n"
+        f"📦 Jami: <b>{total} ta</b>\n"
         f"✅ Qabul qilingan: <b>{accepted} ta</b>\n"
-        f"❌ Bekor qilingan: <b>{rejected} ta</b>\n"
-        f"⏳ Javobsiz: <b>{unanswered} ta</b>\n"
+        f"❌ Rad etilgan: <b>{rejected} ta</b>\n"
+        f"⏰ Muddati o'tgan: <b>{expired} ta</b>\n"
+        f"⏳ Kutilmoqda: <b>{new_count} ta</b>\n"
     ]
 
     if seller_stats:
@@ -1229,7 +1240,7 @@ async def _build_and_send_stats(period_start_str: str, period_end_str: str, labe
                 call_info = f"   📞 {s['calls']} marta qo'ng'iroq — {result}\n"
             lines.append(
                 f"{i}. <b>{s['name']}</b>\n"
-                f"   📦 {s['total']} ta | ✅{s['accepted']} ❌{s['rejected']} ⏳{s['new']}\n"
+                f"   📦 {s['total']} ta | ✅{s['accepted']} ❌{s['rejected']} ⏰{s['expired']} ⏳{s['new']}\n"
                 f"{call_info}"
             )
 
