@@ -122,11 +122,12 @@ def _archive_order_from_api(order: dict):
         # Yangi / aktiv
         'CHECKING': 'new', 'PENDING': 'new', 'NEW': 'new', 'CREATED': 'new',
         'CART': 'new',
-        # Qabul qilingan / yakunlangan
-        'ACCEPTED': 'accepted', 'PREPARING': 'accepted',
-        'READY': 'accepted', 'ON_DELIVERY': 'accepted',
-        'DELIVERING': 'accepted', 'COMPLETED': 'accepted',
-        'FINISHED': 'accepted', 'DONE': 'accepted',
+        # Qabul qilingan / tayyorlanmoqda
+        'ACCEPTED': 'accepted', 'PREPARING': 'accepted', 'READY': 'accepted',
+        # Yetkazilmoqda
+        'ON_DELIVERY': 'delivering', 'DELIVERING': 'delivering',
+        # Yetkazildi / yakunlandi
+        'COMPLETED': 'completed', 'FINISHED': 'done', 'DONE': 'done',
         # Bekor / rad
         'CANCELLED': 'rejected', 'REJECTED': 'rejected',
         'CANCELLED_BY_CLIENT': 'rejected', 'REJECTED_BY_SELLER': 'rejected',

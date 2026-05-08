@@ -119,11 +119,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         total = len(daily_orders)
         st = lambda s: len([o for o in daily_orders if o.get('status') == s])
-        accepted   = st('accepted')
-        rejected   = st('rejected') + st('cancelled')
-        expired    = st('expired')
-        new_orders = st('new')
-        completed  = st('completed')
+        accepted    = st('accepted')
+        rejected    = st('rejected') + st('cancelled')
+        expired     = st('expired')
+        new_orders  = st('new')
+        delivering  = st('delivering') + st('on_delivery')
+        delivered   = st('completed') + st('finished') + st('done')
         calls_count = len([o for o in daily_orders if o.get('customer_phone')])
 
         # AMI qo'ng'iroq statistikasi (bugun)
@@ -145,9 +146,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📦 <b>BUYURTMALAR:</b> {total} ta\n"
             f"├ ✅ Qabul qilindi: {accepted}\n"
+            f"├ 🚴 Yetkazilmoqda: {delivering}\n"
+            f"├ 🏁 Yetkazildi: {delivered}\n"
             f"├ ❌ Rad etildi: {rejected}\n"
             f"├ ⏰ Muddati o'tgan: {expired}\n"
-            f"├ 🏁 Yakunlandi: {completed}\n"
             f"└ ⏳ Kutilmoqda: {new_orders}\n\n"
             f"📞 <b>QO'NG'IROQLAR:</b> {calls_total} ta\n"
             f"├ ✅ Javob berdi: {calls_answered}\n"
