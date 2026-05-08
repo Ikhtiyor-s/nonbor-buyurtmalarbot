@@ -2299,7 +2299,11 @@ async def show_orders_list(query, period="daily", status="all", page=0):
         seller_id = o.get('seller_id', '')
         if seller_id not in sellers_cache:
             s = Seller.get(id=seller_id)
-            sellers_cache[seller_id] = (s.full_name[:14] if s else o.get('seller_name', '—')[:14])
+            # Seller modeldan, yo'qsa orderning seller_name maydonidan olamiz
+            sellers_cache[seller_id] = (
+                s.full_name[:16] if s else
+                (o.get('seller_name') or '')[:16] or '—'
+            )
         biz = sellers_cache[seller_id]
         amt_str = f"{total_amt // 100:,}".replace(",", " ")
         dlv_str = f" + {delivery_fee // 100:,} 🚴".replace(",", " ") if delivery_fee > 0 else ""
@@ -2307,7 +2311,7 @@ async def show_orders_list(query, period="daily", status="all", page=0):
         text += f"    👤 {name} | 💰 {amt_str} so'm{dlv_str}\n"
         order_buttons.append([
             InlineKeyboardButton(
-                f"{icon} #{ext_id} — {biz}",
+                f"{icon} #{ext_id}",
                 callback_data=f"order_detail_{o.get('id', ext_id)}"
             )
         ])
