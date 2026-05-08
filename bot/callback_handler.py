@@ -2486,10 +2486,11 @@ async def show_admins_list(query):
         InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
     ])
 
+    env_count = len([a for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()])
     phones_text = "\n".join(lines) if lines else "<i>Hali qo'shimcha admin yo'q</i>"
     await query.message.edit_text(
         f"👤 <b>Adminlar</b>\n\n"
-        f"<b>.env dan:</b> <code>{os.getenv('ADMIN_IDS', '—')}</code>\n\n"
+        f"Asosiy adminlar: <b>{env_count} ta</b>\n\n"
         f"<b>Qo'shilgan adminlar (telefon):</b>\n{phones_text}\n\n"
         f"<i>Telefon raqam kiritilganda, shu raqam bilan ro'yxatdan o'tgan foydalanuvchi admin huquqini oladi.</i>",
         parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
