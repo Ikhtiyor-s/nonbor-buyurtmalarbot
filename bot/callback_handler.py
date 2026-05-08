@@ -368,6 +368,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_notify":
         await show_notification_templates(query)
 
+    elif data.startswith("order_detail_"):
+        order_id = data.replace("order_detail_", "")
+        await show_order_detail(query, order_id)
+
     elif data.startswith("orders_list_"):
         # format: orders_list_{period}_{status}_{page}
         parts = data.replace("orders_list_", "").split("_")
@@ -2282,24 +2286,125 @@ async def show_orders_list(query, period="daily", status="all", page=0):
     text += "\n"
 
     sellers_cache = {}
+    order_buttons = []
     for i, o in enumerate(page_items, start_idx + 1):
         icon = STATUS_ICONS.get(o.get('status', ''), '•')
         ext_id = o.get('external_id', o.get('id', '?'))
         name = (o.get('customer_name', 'Mijoz') or 'Mijoz')[:18]
-        total_amt = o.get('total_amount', 0)
+        total_amt = int(o.get('total_amount', 0))
+        # Yetkazib berish narxini hisoblash
+        items = o.get('items') or []
+        items_sum = sum(int(it.get('price', 0)) * int(it.get('quantity', 1)) for it in items)
+        delivery_fee = total_amt - items_sum
         seller_id = o.get('seller_id', '')
         if seller_id not in sellers_cache:
             s = Seller.get(id=seller_id)
-            sellers_cache[seller_id] = (s.full_name[:14] if s else '—')
+            sellers_cache[seller_id] = (s.full_name[:14] if s else o.get('seller_name', '—')[:14])
         biz = sellers_cache[seller_id]
-        amt_str = f"{int(total_amt) // 100:,}".replace(",", " ")
+        amt_str = f"{total_amt // 100:,}".replace(",", " ")
+        dlv_str = f" + {delivery_fee // 100:,} 🚴".replace(",", " ") if delivery_fee > 0 else ""
         text += f"{i}. {icon} <b>#{ext_id}</b> | {biz}\n"
-        text += f"    👤 {name} | 💰 {amt_str} so'm\n"
+        text += f"    👤 {name} | 💰 {amt_str} so'm{dlv_str}\n"
+        order_buttons.append([
+            InlineKeyboardButton(
+                f"{icon} #{ext_id} — {biz}",
+                callback_data=f"order_detail_{o.get('id', ext_id)}"
+            )
+        ])
 
     if not page_items:
         text += "<i>Bu davr va filtrda buyurtmalar yo'q</i>\n"
 
-    keyboard = _orders_keyboard("orders", period, status, page, total_pages)
+    nav_keyboard = _orders_keyboard("orders", period, status, page, total_pages)
+    # Order tugmalari + navigatsiya
+    full_keyboard = order_buttons + nav_keyboard
+    await query.message.edit_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(full_keyboard))
+
+
+async def show_order_detail(query, order_id: str):
+    """Buyurtma tafsilotlari"""
+    from .models import Order, Seller
+
+    # UUID yoki external_id bo'yicha qidirish
+    all_orders = Order.load_all()
+    o = None
+    for od in all_orders:
+        if od.get('id') == order_id or od.get('external_id') == order_id:
+            o = od
+            break
+
+    if not o:
+        await query.answer("Buyurtma topilmadi", show_alert=True)
+        return
+
+    status_val = o.get('status', '')
+    icon = STATUS_ICONS.get(status_val, '•')
+    status_name = {
+        'new': 'Yangi', 'accepted': 'Qabul qilindi',
+        'rejected': 'Rad etildi', 'cancelled': 'Bekor qilindi',
+        'expired': "Muddati o'tgan", 'completed': 'Yakunlandi',
+    }.get(status_val, status_val)
+
+    seller_id = o.get('seller_id', '')
+    s = Seller.get(id=seller_id)
+    biz_name = s.full_name if s else o.get('seller_name', '—')
+
+    items = o.get('items') or []
+    items_sum = sum(int(it.get('price', 0)) * int(it.get('quantity', 1)) for it in items)
+    total_amt = int(o.get('total_amount', 0))
+    delivery_fee = total_amt - items_sum
+
+    items_text = ''
+    for it in items:
+        p = int(it.get('price', 0)) // 100
+        q = int(it.get('quantity', 1))
+        items_text += f"  • {it.get('name', '?')} x{q} — {p * q:,} so'm\n".replace(",", " ")
+
+    DELIVERY_LABELS = {'DELIVERY': '🚴 Yetkazib berish', 'PICKUP': '🏪 Olib ketish'}
+    PAYMENT_LABELS = {
+        'CASH': '💵 Naqd', 'CARD': '💳 Karta',
+        'PAYME': '💳 Payme', 'CLICK': '💳 Click',
+        'UZUM': '💳 Uzum Bank',
+    }
+    dm = (o.get('order_delivery_method') or '').upper()
+    pm = (o.get('payment_method') or '').upper()
+    planned = o.get('planned_datetime') or ''
+    source = o.get('source') or ''
+
+    extra = ''
+    if dm and dm in DELIVERY_LABELS:
+        extra += f"🚚 Yetkazish: {DELIVERY_LABELS[dm]}\n"
+    if pm and pm in PAYMENT_LABELS:
+        extra += f"💳 To'lov: {PAYMENT_LABELS[pm]}\n"
+    if planned:
+        try:
+            pt = datetime.fromisoformat(planned[:19])
+            extra += f"📅 Reja: {pt.strftime('%d.%m.%Y %H:%M')}\n"
+        except Exception:
+            extra += f"📅 Reja: {planned}\n"
+    if source:
+        extra += f"📱 Platforma: {source}\n"
+
+    notified = o.get('notified_at', '')[:16].replace('T', ' ')
+
+    text = (
+        f"{icon} <b>Buyurtma #{o.get('external_id', o.get('id', '?'))}</b>\n"
+        f"Holat: <b>{status_name}</b>\n"
+        f"🕐 {notified}\n\n"
+        f"🏪 <b>Restoran:</b> {biz_name}\n"
+        f"👤 <b>Mijoz:</b> {o.get('customer_name') or '—'}\n"
+        f"📞 <b>Tel:</b> {o.get('customer_phone') or '—'}\n"
+        f"📍 <b>Manzil:</b> {o.get('delivery_address') or '—'}\n\n"
+        f"📋 <b>Mahsulotlar:</b>\n{items_text}"
+        f"\n📦 Mahsulotlar: {items_sum // 100:,} so'm\n".replace(",", " ")
+    )
+    if delivery_fee > 0:
+        text += f"🚴 Yetkazib berish: {delivery_fee // 100:,} so'm\n".replace(",", " ")
+    text += f"💰 <b>Jami: {total_amt // 100:,} so'm</b>\n".replace(",", " ")
+    if extra:
+        text += f"\n{extra}"
+
+    keyboard = [[InlineKeyboardButton("◀️ Ortga", callback_data="admin_orders")]]
     await query.message.edit_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
 
 
