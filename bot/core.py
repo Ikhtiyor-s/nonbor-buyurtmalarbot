@@ -542,8 +542,9 @@ async def _process_single_order(order: dict) -> bool:
         return False
 
     state = (order.get('state') or '').upper()
-    # Faqat CHECKING holatidagi buyurtmalar ishlanadi
-    if state != 'CHECKING':
+    # Yangi buyurtma statelari — guruhga yuborish kerak bo'lganlar
+    ACTIVE_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
+    if state and state not in ACTIVE_STATES:
         sent_orders.add(order_id)
         return False
 
@@ -676,6 +677,12 @@ async def fetch_and_send_orders():
     api_url = os.getenv('EXTERNAL_API_URL')
     if not api_url:
         return
+
+    # state parametri qo'shsak API barcha statuslarni qaytaradi
+    if '?' not in api_url:
+        api_url += '?state=PENDING'
+    elif 'state=' not in api_url:
+        api_url += '&state=PENDING'
 
     try:
         api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
