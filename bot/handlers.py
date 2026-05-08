@@ -18,21 +18,28 @@ PENDING_REGISTRATIONS = {}
 
 async def is_admin(user_id: int) -> bool:
     """Admin tekshirish - Telegram ID yoki telefon raqam orqali"""
-    from .models import PhoneRegistry
+    from .models import PhoneRegistry, AdminSettings
 
-    # 1. Telegram ID bo'yicha tekshirish
+    # 1. .env dagi Telegram ID bo'yicha
     admin_ids = os.getenv('ADMIN_IDS', '').split(',')
-    if str(user_id) in admin_ids:
+    if str(user_id) in [a.strip() for a in admin_ids if a.strip()]:
         return True
 
-    # 2. Telefon raqam bo'yicha tekshirish
-    allowed_phones = os.getenv('ALLOWED_PHONES', '').split(',')
-    allowed_phones = [p.strip() for p in allowed_phones if p.strip()]
+    # 2. settings.json dagi qo'shimcha adminlar (Telegram ID)
+    extra_ids = AdminSettings.get_extra_admin_ids()
+    if str(user_id) in extra_ids:
+        return True
 
-    if allowed_phones:
-        # Foydalanuvchining ro'yxatdan o'tgan telefon raqamini tekshirish
+    # 3. Telefon raqam bo'yicha (env + settings)
+    allowed_phones = [p.strip() for p in os.getenv('ALLOWED_PHONES', '').split(',') if p.strip()]
+    admin_phones = AdminSettings.get_admin_phones()
+    all_phones = set(allowed_phones) | set(admin_phones)
+
+    if all_phones:
         phone_registry = PhoneRegistry.get_by_telegram_id(str(user_id))
-        if phone_registry and phone_registry.phone in allowed_phones:
+        if phone_registry and phone_registry.phone in all_phones:
+            # Telegram ID sini ham saqlash (keyingi tekshiruvlar tezroq bo'lsin)
+            AdminSettings.add_extra_admin_id(str(user_id))
             return True
 
     return False

@@ -224,6 +224,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_search":
         await show_order_search(query, context)
 
+    elif data == "settings_admin_group_menu":
+        await show_admin_group_menu(query)
+
     elif data == "settings_admin_group":
         await ask_admin_group(query, context)
 
@@ -231,7 +234,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from .models import AdminSettings
         AdminSettings.remove_admin_group()
         await query.answer("Admin guruh o'chirildi!", show_alert=True)
-        await show_admin_settings(query)
+        await show_admin_group_menu(query)
+
+    elif data == "settings_admins":
+        await show_admins_list(query)
+
+    elif data == "admin_add_phone":
+        context.user_data.pop('waiting_health_field', None)
+        context.user_data.pop('waiting_stats_field', None)
+        context.user_data['waiting_admin_phone'] = True
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_admins")]]
+        await query.message.edit_text(
+            "👤 <b>Admin qo'shish</b>\n\n"
+            "Yangi adminning telefon raqamini kiriting:\n"
+            "<code>+998901234567</code>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("admin_remove_phone_"):
+        phone = data.replace("admin_remove_phone_", "")
+        from .models import AdminSettings
+        AdminSettings.remove_admin_phone(phone)
+        await query.answer(f"O'chirildi: {phone}", show_alert=False)
+        await show_admins_list(query)
 
     elif data == "settings_stats_config":
         await show_stats_config(query)
@@ -2349,24 +2374,22 @@ async def show_admin_settings(query):
         group_info = "❌ <b>Admin guruh:</b> ulanmagan"
 
     stats_cfg = AdminSettings.get_stats_config()
+    admin_phones = AdminSettings.get_admin_phones()
 
     keyboard = [
         [
             InlineKeyboardButton("🔍 Qidirish", callback_data="settings_search"),
-            InlineKeyboardButton("👥 Admin guruh ulash", callback_data="settings_admin_group"),
+            InlineKeyboardButton("👥 Admin guruh", callback_data="settings_admin_group_menu"),
         ],
         [
+            InlineKeyboardButton("👤 Adminlar", callback_data="settings_admins"),
             InlineKeyboardButton("📊 Statistika vaqti", callback_data="settings_stats_config"),
+        ],
+        [
             InlineKeyboardButton("🌐 API monitoring", callback_data="settings_health_config"),
+            InlineKeyboardButton("◀️ Ortga", callback_data="back_admin"),
         ],
     ]
-    if admin_group_id:
-        keyboard.append([
-            InlineKeyboardButton("🗑 Admin guruhni o'chirish", callback_data="settings_remove_admin_group"),
-            InlineKeyboardButton("◀️ Ortga", callback_data="back_admin"),
-        ])
-    else:
-        keyboard.append([InlineKeyboardButton("◀️ Ortga", callback_data="back_admin")])
 
     await query.message.edit_text(
         f"⚙️ <b>Sozlamalar</b>\n\n"
@@ -2374,7 +2397,7 @@ async def show_admin_settings(query):
         f"📊 <b>Kunlik statistika:</b>\n"
         f"  Davr: {stats_cfg['period_start']} — {stats_cfg['period_end']}\n"
         f"  Yuborish vaqti: {stats_cfg['send_time']}\n\n"
-        f"<i>Admin guruhga barcha buyurtmalar haqida xabar yuboriladi.</i>",
+        f"👤 <b>Qo'shimcha adminlar:</b> {len(admin_phones)} ta",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -2416,6 +2439,85 @@ async def ask_stats_time(query, prompt: str):
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def show_admin_group_menu(query):
+    """Admin guruh sozlamalari sub-menyusi"""
+    from .models import AdminSettings
+    admin_group_id = AdminSettings.get_admin_group_chat_id()
+    admin_group_title = AdminSettings.get_admin_group_title()
+
+    if admin_group_id:
+        info = f"✅ <b>Ulangan:</b> {admin_group_title or admin_group_id}\n🆔 <code>{admin_group_id}</code>"
+        keyboard = [
+            [InlineKeyboardButton("🔄 Guruhni almashtirish", callback_data="settings_admin_group")],
+            [InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data="settings_remove_admin_group")],
+            [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
+        ]
+    else:
+        info = "❌ <b>Admin guruh ulanmagan</b>"
+        keyboard = [
+            [InlineKeyboardButton("➕ Guruh ulash", callback_data="settings_admin_group")],
+            [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
+        ]
+
+    await query.message.edit_text(
+        f"👥 <b>Admin guruh</b>\n\n{info}\n\n"
+        f"<i>Guruhda /get_chat_id buyrug'ini bering — avtomatik ulanadi.</i>",
+        parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_admins_list(query):
+    """Qo'shimcha adminlar ro'yxati"""
+    from .models import AdminSettings
+    phones = AdminSettings.get_admin_phones()
+
+    lines = []
+    keyboard = []
+    for i, phone in enumerate(phones, 1):
+        lines.append(f"{i}. <code>{phone}</code>")
+        keyboard.append([
+            InlineKeyboardButton(f"🗑 {phone}", callback_data=f"admin_remove_phone_{phone}")
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("➕ Admin qo'shish", callback_data="admin_add_phone"),
+        InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
+    ])
+
+    phones_text = "\n".join(lines) if lines else "<i>Hali qo'shimcha admin yo'q</i>"
+    await query.message.edit_text(
+        f"👤 <b>Adminlar</b>\n\n"
+        f"<b>.env dan:</b> <code>{os.getenv('ADMIN_IDS', '—')}</code>\n\n"
+        f"<b>Qo'shilgan adminlar (telefon):</b>\n{phones_text}\n\n"
+        f"<i>Telefon raqam kiritilganda, shu raqam bilan ro'yxatdan o'tgan foydalanuvchi admin huquqini oladi.</i>",
+        parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_admin_phone_input(update, context) -> bool:
+    """Admin telefon raqamini qabul qilish"""
+    if not context.user_data.get('waiting_admin_phone'):
+        return False
+
+    text = (update.message.text or '').strip()
+    if not text.startswith('+') or len(text) < 7:
+        await update.message.reply_text("❌ Raqam + bilan boshlanishi kerak. Masalan: +998901234567")
+        return True
+
+    from .models import AdminSettings
+    AdminSettings.add_admin_phone(text)
+    context.user_data.pop('waiting_admin_phone', None)
+
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [[InlineKeyboardButton("👤 Adminlar ro'yxati", callback_data="settings_admins")]]
+    await update.message.reply_text(
+        f"✅ Admin qo'shildi: <b>{text}</b>\n\n"
+        f"<i>Ushbu raqam bilan ro'yxatdan o'tgan foydalanuvchi admin huquqiga ega bo'ladi.</i>",
+        parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return True
 
 
 async def show_health_config(query):

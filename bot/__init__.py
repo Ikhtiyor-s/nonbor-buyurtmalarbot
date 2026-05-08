@@ -265,6 +265,9 @@ def run_bot():
 
     # Message handler for group ID input, phone edit, and group registration
     async def message_handler(update, context):
+        # Admin qo'shish — telefon raqam
+        if await callback_handler.handle_admin_phone_input(update, context):
+            return
         # Statistika vaqt sozlamasi (oldin tekshirish — boshqa handlerlar ushlab olmasin)
         if await callback_handler.handle_stats_time_input(update, context):
             return

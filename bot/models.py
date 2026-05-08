@@ -463,6 +463,50 @@ class AdminSettings:
         cls._save(data)
 
     @classmethod
+    def get_admin_phones(cls) -> list:
+        return cls.get('admin_phones', []) or []
+
+    @classmethod
+    def add_admin_phone(cls, phone: str):
+        data = cls._load()
+        phones = data.get('admin_phones', []) or []
+        if phone not in phones:
+            phones.append(phone)
+            data['admin_phones'] = phones
+            cls._save(data)
+
+    @classmethod
+    def remove_admin_phone(cls, phone: str):
+        data = cls._load()
+        phones = data.get('admin_phones', []) or []
+        if phone in phones:
+            phones.remove(phone)
+            data['admin_phones'] = phones
+            cls._save(data)
+
+    @classmethod
+    def get_extra_admin_ids(cls) -> list:
+        return [str(x) for x in (cls.get('extra_admin_ids', []) or [])]
+
+    @classmethod
+    def add_extra_admin_id(cls, telegram_id: str):
+        data = cls._load()
+        ids = data.get('extra_admin_ids', []) or []
+        if str(telegram_id) not in [str(x) for x in ids]:
+            ids.append(str(telegram_id))
+            data['extra_admin_ids'] = ids
+            cls._save(data)
+
+    @classmethod
+    def remove_extra_admin_id(cls, telegram_id: str):
+        data = cls._load()
+        ids = [str(x) for x in (data.get('extra_admin_ids', []) or [])]
+        if str(telegram_id) in ids:
+            ids.remove(str(telegram_id))
+            data['extra_admin_ids'] = ids
+            cls._save(data)
+
+    @classmethod
     def get_health_config(cls) -> dict:
         return {
             'phone':    cls.get('health_phone', ''),
