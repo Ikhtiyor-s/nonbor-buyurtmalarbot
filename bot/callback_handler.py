@@ -296,20 +296,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "stats_send_now":
         await query.answer("Statistika yuborilmoqda...", show_alert=False)
-        from .core import generate_and_send_daily_stats
-        from .models import AdminSettings
-        # Vaqt tekshiruvini bypass qilib to'g'ridan-to'g'ri yuborish
-        import bot.core as _core
-        prev = _core._stats_sent_today
-        _core._stats_sent_today = ''
-        cfg = AdminSettings.get_stats_config()
-        _core._stats_sent_today = ''
-        # send_time ni hozirgi vaqtga o'rnatib yuborish
-        now_str = __import__('datetime').datetime.now().strftime('%H:%M')
-        AdminSettings.set_stats_config(send_time=now_str)
-        await generate_and_send_daily_stats()
-        AdminSettings.set_stats_config(send_time=cfg['send_time'])
-        _core._stats_sent_today = prev
+        from .core import _send_stats_now
+        await _send_stats_now()
         await show_stats_config(query)
 
     elif data == "admin_test":
@@ -1480,6 +1468,11 @@ async def accept_order(order_id, query):
 
     order.status = 'accepted'
     order.save()
+    try:
+        from .core import _archive_order
+        _archive_order(order.external_id, order.seller_id, '', 'accepted', order.total_amount, order.items, order.notified_at)
+    except Exception:
+        pass
 
     # Alert xabarini o'chirish
     try:
@@ -1739,6 +1732,11 @@ async def reject_order(order_id, query):
 
     order.status = 'cancelled'
     order.save()
+    try:
+        from .core import _archive_order
+        _archive_order(order.external_id, order.seller_id, '', 'rejected', order.total_amount, order.items, order.notified_at)
+    except Exception:
+        pass
 
     # Alert xabarini o'chirish
     try:
@@ -2432,7 +2430,7 @@ async def show_health_config(query):
     if last_ok and last_ok != '—':
         try:
             from datetime import datetime
-            last_ok = datetime.fromisoformat(last_ok).strftime('%H:%M:%S')
+            last_ok = datetime.fromisoformat(last_ok).strftime('%d.%m.%Y %H:%M:%S')
         except Exception:
             pass
 

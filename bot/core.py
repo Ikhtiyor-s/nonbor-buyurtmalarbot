@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 ALERT_TRACKER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'alert_tracker.json')
 SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summary_msg.json')
 CALL_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'call_log.json')
+ORDER_HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'order_history.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
 WAIT_BEFORE_CALL = int(os.getenv('WAIT_BEFORE_CALL', 90))
 MAX_CALL_ATTEMPTS = int(os.getenv('MAX_CALL_ATTEMPTS', 2))
@@ -52,6 +53,98 @@ def _save_call_log(data):
     os.makedirs(os.path.dirname(CALL_LOG_FILE), exist_ok=True)
     with open(CALL_LOG_FILE, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _archive_order(order_id, seller_id, seller_name, status, total, items, notified_at):
+    """Buyurtmani tarixga yozish (statistika uchun, o'chmas)"""
+    try:
+        if os.path.exists(ORDER_HISTORY_FILE):
+            with open(ORDER_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                history = json.load(f)
+        else:
+            history = []
+
+        # Allaqachon bor bo'lsa update qilish
+        for entry in history:
+            if str(entry.get('order_id')) == str(order_id):
+                entry['status'] = status
+                break
+        else:
+            history.append({
+                'order_id': str(order_id),
+                'seller_id': str(seller_id),
+                'seller_name': seller_name,
+                'status': status,
+                'total': total,
+                'items': items or [],
+                'notified_at': notified_at,
+            })
+
+        # 30 kundan eski yozuvlarni tozalash
+        cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+        history = [e for e in history if e.get('notified_at', '') >= cutoff]
+
+        os.makedirs(os.path.dirname(ORDER_HISTORY_FILE), exist_ok=True)
+        with open(ORDER_HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"_archive_order xato: {e}")
+
+
+def _archive_order_from_api(order: dict):
+    """Nonbor API buyurtmasini tarixga yozish (barcha statuslar uchun)"""
+    order_id = order.get('id')
+    if not order_id:
+        return
+    business = order.get('business', {}) or {}
+    seller_name = business.get('title', '') or business.get('name', '')
+    seller_phone = business.get('phone', '')
+    seller_id = f"biz_{seller_phone}" if seller_phone else f"biz_{str(order_id)}"
+
+    # Seller modelidan ID ni topishga urinish
+    try:
+        from .models import Seller
+        sellers = Seller.filter(is_active=True)
+        for s in sellers:
+            if s.business_phone and s.business_phone == seller_phone:
+                seller_id = s.id
+                if not seller_name:
+                    seller_name = s.full_name
+                break
+            if s.full_name == seller_name:
+                seller_id = s.id
+                break
+    except Exception:
+        pass
+
+    state = (order.get('state') or '').upper()
+    STATUS_MAP = {
+        'ACCEPTED': 'accepted', 'COMPLETED': 'accepted',
+        'CANCELLED': 'rejected', 'REJECTED': 'rejected',
+        'CHECKING': 'new', 'PENDING': 'new', 'NEW': 'new',
+    }
+    status = STATUS_MAP.get(state, 'new')
+
+    order_items = order.get('order_item', []) or []
+    items = []
+    for item in order_items:
+        product = item.get('product', {}) or {}
+        items.append({
+            'name': product.get('name', ''),
+            'price': product.get('price', 0),
+            'quantity': item.get('quantity', 1),
+        })
+
+    created_at = order.get('created_at') or datetime.now().isoformat()
+    _archive_order(order_id, seller_id, seller_name, status,
+                   order.get('total_price', 0), items, created_at)
+
+
+def _load_order_history():
+    if os.path.exists(ORDER_HISTORY_FILE):
+        with open(ORDER_HISTORY_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
 
 
 def log_ami_call(seller_id: str, seller_name: str, phone: str, success: bool):
@@ -534,6 +627,17 @@ async def _process_single_order(order: dict) -> bool:
         'delivery_type': delivery_type,
     }
 
+    # Buyurtmani tarixga yozish
+    _archive_order(
+        order_id=order_id,
+        seller_id=target_seller.id if target_seller else f"biz_{business_phone}",
+        seller_name=business_name or (target_seller.full_name if target_seller else ''),
+        status='new',
+        total=order.get('total_price', 0),
+        items=items,
+        notified_at=datetime.now().isoformat(),
+    )
+
     bot = NotificationBot()
     if target_seller and target_seller.group_chat_id:
         success = await bot.send_order_notification(order_data)
@@ -603,6 +707,9 @@ async def fetch_and_send_orders():
         logger.info(f"Orders API: total={total_count}, fetched={len(orders)}, states={states_found}")
 
         for order in orders:
+            # Barcha buyurtmalarni statistika uchun arxivlash (state qanday bo'lishidan qat'i nazar)
+            _archive_order_from_api(order)
+            # Faqat CHECKING holatidagilarni guruhga yuborish
             await _process_single_order(order)
 
     except Exception as e:
@@ -993,10 +1100,155 @@ async def check_and_call_sellers():
         _save_alert_tracker(tracker)
 
 
+async def _send_stats_now():
+    """Admin so'rovi bilan darhol statistika yuborish (vaqt cheki yo'q)"""
+    from .models import AdminSettings
+    cfg = AdminSettings.get_stats_config()
+    await _build_and_send_stats(
+        period_start_str=cfg['period_start'],
+        period_end_str=cfg['period_end'],
+        label="JORIY STATISTIKA"
+    )
+
+
+async def _build_and_send_stats(period_start_str: str, period_end_str: str, label: str = "KUNLIK STATISTIKA"):
+    """Statistikani yaratib yuborish — asosiy logika"""
+    from .models import Seller, AdminSettings
+
+    now = datetime.now()
+
+    def parse_hm(s):
+        h, m = map(int, s.split(':'))
+        return h * 60 + m
+
+    start_min = parse_hm(period_start_str)
+    end_min = parse_hm(period_end_str)
+
+    period_end_dt = now.replace(
+        hour=int(period_end_str.split(':')[0]),
+        minute=int(period_end_str.split(':')[1]),
+        second=59, microsecond=999999
+    )
+    if start_min > end_min:
+        period_start_dt = (period_end_dt - timedelta(days=1)).replace(
+            hour=int(period_start_str.split(':')[0]),
+            minute=int(period_start_str.split(':')[1]),
+            second=0, microsecond=0
+        )
+    else:
+        period_start_dt = period_end_dt.replace(
+            hour=int(period_start_str.split(':')[0]),
+            minute=int(period_start_str.split(':')[1]),
+            second=0, microsecond=0
+        )
+
+    # Tarixdan o'qish
+    all_history = _load_order_history()
+    period_orders = []
+    for od in all_history:
+        notified_at = od.get('notified_at', '')
+        if not notified_at:
+            continue
+        try:
+            t = datetime.fromisoformat(notified_at[:19])
+            if period_start_dt <= t <= period_end_dt:
+                period_orders.append(od)
+        except ValueError:
+            continue
+
+    # Call logi
+    call_log = _load_call_log()
+    period_calls = []
+    for c in call_log:
+        cat = c.get('called_at', '')
+        try:
+            t = datetime.fromisoformat(cat[:19])
+            if period_start_dt <= t <= period_end_dt:
+                period_calls.append(c)
+        except ValueError:
+            continue
+
+    total = len(period_orders)
+    accepted = sum(1 for o in period_orders if o.get('status') == 'accepted')
+    rejected = sum(1 for o in period_orders if o.get('status') in ('rejected', 'cancelled'))
+    unanswered = total - accepted - rejected
+
+    seller_stats: dict = {}
+    for od in period_orders:
+        sid = od.get('seller_id', 'unknown')
+        if sid not in seller_stats:
+            name = od.get('seller_name', '')
+            if not name:
+                s = Seller.get(id=sid)
+                name = s.full_name if s else sid[:12]
+            seller_stats[sid] = {
+                'name': name, 'total': 0,
+                'accepted': 0, 'rejected': 0, 'new': 0,
+                'calls': 0, 'calls_success': 0,
+            }
+        seller_stats[sid]['total'] += 1
+        st = od.get('status', 'new')
+        if st == 'accepted':
+            seller_stats[sid]['accepted'] += 1
+        elif st in ('rejected', 'cancelled'):
+            seller_stats[sid]['rejected'] += 1
+        else:
+            seller_stats[sid]['new'] += 1
+
+    for c in period_calls:
+        sid = c.get('seller_id', '')
+        if sid in seller_stats:
+            seller_stats[sid]['calls'] += 1
+            if c.get('success'):
+                seller_stats[sid]['calls_success'] += 1
+
+    date_label = (period_start_dt.strftime('%d.%m.%Y %H:%M') +
+                  ' — ' + period_end_dt.strftime('%d.%m.%Y %H:%M'))
+    lines = [
+        f"📊 <b>{label}</b>\n"
+        f"🕐 {date_label}\n\n"
+        f"📦 Jami buyurtmalar: <b>{total} ta</b>\n"
+        f"✅ Qabul qilingan: <b>{accepted} ta</b>\n"
+        f"❌ Bekor qilingan: <b>{rejected} ta</b>\n"
+        f"⏳ Javobsiz: <b>{unanswered} ta</b>\n"
+    ]
+
+    if seller_stats:
+        lines.append("\n<b>━━━ RESTORANLAR ━━━</b>\n")
+        for i, (sid, s) in enumerate(seller_stats.items(), 1):
+            call_info = ''
+            if s['calls'] > 0:
+                result = "javob berdi ✅" if s['calls_success'] > 0 else "javob bermadi ❌"
+                call_info = f"   📞 {s['calls']} marta qo'ng'iroq — {result}\n"
+            lines.append(
+                f"{i}. <b>{s['name']}</b>\n"
+                f"   📦 {s['total']} ta | ✅{s['accepted']} ❌{s['rejected']} ⏳{s['new']}\n"
+                f"{call_info}"
+            )
+
+    text = "".join(lines)
+    admin_group_id = AdminSettings.get_admin_group_chat_id()
+    admin_ids = [a.strip() for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()]
+    tg_bot = NotificationBot().bot
+
+    if admin_group_id:
+        try:
+            await tg_bot.send_message(chat_id=int(admin_group_id), text=text, parse_mode='HTML')
+        except TelegramError as e:
+            logger.error(f"Stats guruhga yuborishda xato: {e}")
+    for admin_id in admin_ids:
+        try:
+            await tg_bot.send_message(chat_id=int(admin_id), text=text, parse_mode='HTML')
+        except TelegramError as e:
+            logger.error(f"Stats adminga yuborishda xato: {e}")
+
+    logger.info(f"Statistika yuborildi: {total} buyurtma ({period_start_str}—{period_end_str})")
+
+
 async def generate_and_send_daily_stats():
     """Kunlik statistikani yaratib admin va admin guruhga yuborish"""
     global _stats_sent_today
-    from .models import Order, Seller, AdminSettings
+    from .models import AdminSettings
 
     config = AdminSettings.get_stats_config()
     period_start_str = config.get('period_start', '22:30')
@@ -1014,132 +1266,9 @@ async def generate_and_send_daily_stats():
     if current_time_str != send_time_str:
         return
 
-    # Davr hisoblash
-    # period_start > period_end → tun oshib o'tadi (22:30 → 08:00)
-    def parse_time(s):
-        h, m = map(int, s.split(':'))
-        return h * 60 + m
-
-    start_min = parse_time(period_start_str)
-    end_min = parse_time(period_end_str)
-
-    period_end_dt = now.replace(hour=int(period_end_str.split(':')[0]),
-                                minute=int(period_end_str.split(':')[1]),
-                                second=0, microsecond=0)
-    if start_min > end_min:
-        # tun oshadi: start kechasi, end ertalab
-        period_start_dt = (period_end_dt - timedelta(days=1)).replace(
-            hour=int(period_start_str.split(':')[0]),
-            minute=int(period_start_str.split(':')[1]),
-            second=0, microsecond=0
-        )
-    else:
-        period_start_dt = period_end_dt.replace(
-            hour=int(period_start_str.split(':')[0]),
-            minute=int(period_start_str.split(':')[1])
-        )
-
-    # Buyurtmalarni davr bo'yicha filtrlash
-    all_orders = Order.load_all()
-    period_orders = []
-    for od in all_orders:
-        notified_at = od.get('notified_at', '')
-        if not notified_at:
-            continue
-        try:
-            t = datetime.fromisoformat(notified_at)
-            if period_start_dt <= t <= period_end_dt:
-                period_orders.append(od)
-        except ValueError:
-            continue
-
-    # AMI qo'ng'iroq logi
-    call_log = _load_call_log()
-    period_calls = [
-        c for c in call_log
-        if period_start_dt.isoformat() <= c.get('called_at', '') <= period_end_dt.isoformat()
-    ]
-
-    # Statistika hisoblash
-    total = len(period_orders)
-    accepted = sum(1 for o in period_orders if o.get('status') == 'accepted')
-    rejected = sum(1 for o in period_orders if o.get('status') == 'rejected')
-    unanswered = sum(1 for o in period_orders if o.get('status') == 'new')
-
-    # Seller bo'yicha guruhlash
-    seller_stats: dict = {}
-    for od in period_orders:
-        sid = od.get('seller_id', 'unknown')
-        if sid not in seller_stats:
-            s = Seller.get(id=sid)
-            seller_stats[sid] = {
-                'name': s.full_name if s else f'#{sid[:8]}',
-                'total': 0, 'accepted': 0, 'rejected': 0, 'new': 0,
-                'calls': 0, 'calls_success': 0,
-            }
-        seller_stats[sid]['total'] += 1
-        status = od.get('status', 'new')
-        seller_stats[sid][status if status in ('accepted', 'rejected') else 'new'] += 1
-
-    for c in period_calls:
-        sid = c.get('seller_id', '')
-        if sid in seller_stats:
-            seller_stats[sid]['calls'] += 1
-            if c.get('success'):
-                seller_stats[sid]['calls_success'] += 1
-
-    # Xabar formatlash
-    date_label = period_start_dt.strftime('%d.%m.%Y %H:%M') + ' — ' + period_end_dt.strftime('%d.%m.%Y %H:%M')
-    lines = [
-        f"📊 <b>KUNLIK STATISTIKA</b>\n"
-        f"🕐 {date_label}\n\n"
-        f"📦 Jami buyurtmalar: <b>{total} ta</b>\n"
-        f"✅ Qabul qilingan: <b>{accepted} ta</b>\n"
-        f"❌ Bekor qilingan: <b>{rejected} ta</b>\n"
-        f"⏳ Javobsiz: <b>{unanswered} ta</b>\n"
-    ]
-
-    if seller_stats:
-        lines.append("\n<b>━━━ RESTORANLAR ━━━</b>\n")
-        for i, (sid, s) in enumerate(seller_stats.items(), 1):
-            call_info = ''
-            if s['calls'] > 0:
-                if s['calls_success'] > 0:
-                    call_info = f"   📞 {s['calls']} marta qo'ng'iroq — javob berdi\n"
-                else:
-                    call_info = f"   📞 {s['calls']} marta qo'ng'iroq — javob bermadi\n"
-            lines.append(
-                f"{i}. <b>{s['name']}</b>\n"
-                f"   📦 {s['total']} ta buyurtma"
-                f" | ✅{s['accepted']} ❌{s['rejected']} ⏳{s['new']}\n"
-                f"{call_info}"
-            )
-
-    text = "".join(lines)
-
-    # Yuborish
-    admin_group_id = AdminSettings.get_admin_group_chat_id()
-    admin_ids = [aid.strip() for aid in os.getenv('ADMIN_IDS', '').split(',') if aid.strip()]
-    tg_bot = NotificationBot().bot
-
-    sent = False
-    if admin_group_id:
-        try:
-            await tg_bot.send_message(chat_id=int(admin_group_id), text=text, parse_mode='HTML')
-            sent = True
-        except TelegramError as e:
-            logger.error(f"Daily stats guruhga yuborishda xato: {e}")
-
-    for admin_id in admin_ids:
-        try:
-            await tg_bot.send_message(chat_id=int(admin_id), text=text, parse_mode='HTML')
-            sent = True
-        except TelegramError as e:
-            logger.error(f"Daily stats adminga yuborishda xato: {e}")
-
-    if sent:
-        _stats_sent_today = today_key
-        logger.info(f"Kunlik statistika yuborildi ({total} buyurtma, {period_start_str}-{period_end_str})")
+    await _build_and_send_stats(period_start_str, period_end_str)
+    _stats_sent_today = today_key
+    logger.info(f"Kunlik statistika yuborildi ({period_start_str}-{period_end_str})")
 
 
 async def check_api_health():
