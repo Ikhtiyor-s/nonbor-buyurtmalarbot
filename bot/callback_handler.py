@@ -239,6 +239,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_admins":
         await show_admins_list(query)
 
+    elif data.startswith("admin_select_"):
+        phone = data.replace("admin_select_", "")
+        await show_admins_list(query, selected_phone=phone)
+
+    elif data.startswith("admin_confirm_remove_"):
+        phone = data.replace("admin_confirm_remove_", "")
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Ha, o'chirish", callback_data=f"admin_do_remove_{phone}"),
+                InlineKeyboardButton("❌ Yo'q", callback_data="settings_admins"),
+            ]
+        ]
+        await query.message.edit_text(
+            f"🗑 <b>Adminni o'chirish</b>\n\n"
+            f"<code>{phone}</code> raqamli adminni o'chirishni tasdiqlaysizmi?",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("admin_do_remove_"):
+        phone = data.replace("admin_do_remove_", "")
+        from .models import AdminSettings
+        AdminSettings.remove_admin_phone(phone)
+        # Telegram ID sini ham o'chirish
+        AdminSettings.remove_extra_admin_id(phone)
+        await query.answer(f"✅ O'chirildi: {phone}", show_alert=False)
+        await show_admins_list(query)
+
     elif data == "admin_add_phone":
         context.user_data.pop('waiting_health_field', None)
         context.user_data.pop('waiting_stats_field', None)
@@ -251,12 +278,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif data.startswith("admin_remove_phone_"):
-        phone = data.replace("admin_remove_phone_", "")
-        from .models import AdminSettings
-        AdminSettings.remove_admin_phone(phone)
-        await query.answer(f"O'chirildi: {phone}", show_alert=False)
-        await show_admins_list(query)
 
     elif data == "settings_stats_config":
         await show_stats_config(query)
@@ -2468,17 +2489,33 @@ async def show_admin_group_menu(query):
     )
 
 
-async def show_admins_list(query):
+async def show_admins_list(query, selected_phone=None):
     """Qo'shimcha adminlar ro'yxati"""
     from .models import AdminSettings
     phones = AdminSettings.get_admin_phones()
 
+    env_count = len([a for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()])
     lines = []
     keyboard = []
+
     for i, phone in enumerate(phones, 1):
-        lines.append(f"{i}. <code>{phone}</code>")
+        is_selected = (phone == selected_phone)
+        marker = "✅ " if is_selected else ""
+        lines.append(f"{i}. {marker}<code>{phone}</code>")
         keyboard.append([
-            InlineKeyboardButton(f"🗑 {phone}", callback_data=f"admin_remove_phone_{phone}")
+            InlineKeyboardButton(
+                f"{'✅ ' if is_selected else ''}{phone}",
+                callback_data=f"admin_select_{phone}"
+            )
+        ])
+
+    # Tanlangan bo'lsa — o'chirish tugmasi
+    if selected_phone and selected_phone in phones:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"🗑 O'chirish: {selected_phone}",
+                callback_data=f"admin_confirm_remove_{selected_phone}"
+            )
         ])
 
     keyboard.append([
@@ -2486,13 +2523,13 @@ async def show_admins_list(query):
         InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
     ])
 
-    env_count = len([a for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()])
     phones_text = "\n".join(lines) if lines else "<i>Hali qo'shimcha admin yo'q</i>"
+    hint = "\n<i>Adminni tanlang, keyin o'chirish tugmasi chiqadi.</i>" if phones and not selected_phone else ""
     await query.message.edit_text(
         f"👤 <b>Adminlar</b>\n\n"
         f"Asosiy adminlar: <b>{env_count} ta</b>\n\n"
-        f"<b>Qo'shilgan adminlar (telefon):</b>\n{phones_text}\n\n"
-        f"<i>Telefon raqam kiritilganda, shu raqam bilan ro'yxatdan o'tgan foydalanuvchi admin huquqini oladi.</i>",
+        f"<b>Qo'shilgan adminlar:</b>\n{phones_text}"
+        f"{hint}",
         parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
