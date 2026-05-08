@@ -890,7 +890,7 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
     lines.append(
         f"\n<b>━━━━━━━━━━━━━━━━━━━━━</b>\n"
         f"📦 Jami: <b>{count} ta buyurtma</b>\n"
-        f"💰 Umumiy: <b>{total_sum:,} so'm</b>\n\n"
+        f"💰 Umumiy: <b>{int(total_sum) // 100:,} so'm</b>\n\n"
         f"❌ Buyurtmalarni qabul qilmayapti!\n"
         f"{call_line}"
         f"🔴 Zudlik bilan bog'laning!"
