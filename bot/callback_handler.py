@@ -2305,10 +2305,15 @@ async def show_orders_list(query, period="daily", status="all", page=0):
                 (o.get('seller_name') or '')[:16] or '—'
             )
         biz = sellers_cache[seller_id]
-        amt_str = f"{total_amt // 100:,}".replace(",", " ")
-        dlv_str = f" + {delivery_fee // 100:,} 🚴".replace(",", " ") if delivery_fee > 0 else ""
+        products_k = items_sum // 100
+        total_k = total_amt // 100
+        delivery_k = delivery_fee // 100
+        if delivery_k > 0:
+            amt_str = f"{products_k:,} + {delivery_k:,} = {total_k:,} so'm".replace(",", " ")
+        else:
+            amt_str = f"{total_k:,} so'm".replace(",", " ")
         text += f"{i}. {icon} <b>#{ext_id}</b> | {biz}\n"
-        text += f"    👤 {name} | 💰 {amt_str} so'm{dlv_str}\n"
+        text += f"    👤 {name} | 💰 {amt_str}\n"
         order_btn_list.append(
             InlineKeyboardButton(
                 f"{i}",
