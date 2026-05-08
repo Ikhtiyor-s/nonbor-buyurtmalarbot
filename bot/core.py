@@ -384,19 +384,23 @@ class NotificationBot:
 
         items_text = ""
         total_items = 0
+        items_sum = 0
         for item in items:
             quantity = item.get('quantity', 1)
             total_items += quantity
-            item_total = item.get('price', 0) * quantity
+            price_k = int(item.get('price', 0)) // 100
+            item_total_k = price_k * quantity
+            items_sum += item_total_k
 
             items_text += f"  • {item.get('name', 'Nomalum')}\n"
             if quantity > 1:
-                price_k = int(item.get('price', 0)) // 100
-                total_k = int(item_total) // 100
-                items_text += f"    {quantity} x {price_k:,} = {total_k:,} so'm\n".replace(",", " ")
+                items_text += f"    {quantity} x {price_k:,} = {item_total_k:,} so'm\n".replace(",", " ")
             else:
-                price_k = int(item.get('price', 0)) // 100
                 items_text += f"    {price_k:,} so'm\n".replace(",", " ")
+
+        order_total_k = int(order_data.get('total', 0)) // 100
+        delivery_fee_k = order_total_k - items_sum
+        delivery_line = f"🚴 <b>Yetkazib berish:</b> {delivery_fee_k:,} so'm\n".replace(",", " ") if delivery_fee_k > 0 else ""
 
         customer = order_data.get('customer', {})
         delivery_address = order_data.get('delivery_address', '')
@@ -412,13 +416,14 @@ class NotificationBot:
 
 📋 <b>Mahsulotlar ({total_items} ta):</b>
 {items_text}
-💰 <b>Jami:</b> {int(order_data.get('total', 0)) // 100:,} so'm
+📦 <b>Mahsulotlar summasi:</b> {items_sum:,} so'm
+{delivery_line}💰 <b>Jami:</b> {order_total_k:,} so'm
 
 ━━━━━━━━━━━━━━━━━━━━
 👤 <b>Mijoz:</b> {name_display}
 📞 <b>Telefon:</b> <code>{phone_display}</code>
 📍 <b>Manzil:</b> {delivery_address if delivery_address else "Ko'rsatilmagan"}
-"""
+""".replace(",", " ")
 
         message += "\n⚠️ <i>Faqat menejer qabul/rad qila oladi</i>"
 
@@ -872,24 +877,34 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
     lines.append("\n<b>━━━ BUYURTMALAR ━━━</b>\n\n")
     for i, o in enumerate(missed_orders, 1):
         items_text = ""
+        items_total = 0
         for item in (o.items or []):
+            item_price = int(item.get('price', 0)) // 100
+            qty = item.get('quantity', 1)
+            items_total += item_price * qty
             items_text += (
                 f"   Mahsulot: {item.get('name', '?')}\n"
-                f"   Miqdor: {item.get('quantity', 1)} ta\n"
-                f"   Narx: {int(item.get('price', 0)) // 100:,} so'm\n"
+                f"   Miqdor: {qty} ta\n"
+                f"   Narx: {item_price:,} so'm\n"
             )
+        order_total = int(o.total_amount) // 100
+        delivery_fee = order_total - items_total
+        delivery_line = f"   🚴 Yetkazib berish: {delivery_fee:,} so'm\n" if delivery_fee > 0 else ""
         lines.append(
             f"{i}. Buyurtma <b>#{o.external_id}</b>\n"
             f"   Mijoz: {o.customer_name or '—'}\n"
             f"   Tel: {o.customer_phone or '—'}\n"
-            f"{items_text}\n"
+            f"{items_text}"
+            f"   📦 Mahsulotlar: {items_total:,} so'm\n"
+            f"{delivery_line}"
+            f"   💰 Jami: {order_total:,} so'm\n\n"
         )
     crm_url = os.getenv('CRM_ORDERS_URL', '')
     crm_line = f"\n📱 Buyurtmalarni ko'rish ({crm_url})" if crm_url else ""
     call_line = f"📞 {call_count} marta qo'ng'iroq qilindi.\n" if call_count > 0 else ""
     lines.append(
-        f"\n<b>━━━━━━━━━━━━━━━━━━━━━</b>\n"
-        f"📦 Jami: <b>{count} ta buyurtma</b>\n"
+        f"<b>━━━━━━━━━━━━━━━━━━━━━</b>\n"
+        f"📦 Jami buyurtmalar: <b>{count} ta</b>\n"
         f"💰 Umumiy: <b>{int(total_sum) // 100:,} so'm</b>\n\n"
         f"❌ Buyurtmalarni qabul qilmayapti!\n"
         f"{call_line}"
