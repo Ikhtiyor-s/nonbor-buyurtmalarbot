@@ -241,6 +241,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop('waiting_health_field', None)
         await show_health_config(query)
 
+    elif data == "health_clear_phone":
+        from .models import AdminSettings
+        AdminSettings.set_health_config(phone='')
+        await query.answer("Raqam o'chirildi!", show_alert=False)
+        await show_health_config(query)
+
     elif data == "health_edit_phone":
         context.user_data.pop('waiting_stats_field', None)
         context.user_data['waiting_health_field'] = 'phone'
@@ -2431,10 +2437,11 @@ async def show_health_config(query):
             pass
 
     phone_display = cfg['phone'] or '❌ kiritilmagan'
+    phone_row = [InlineKeyboardButton(f"📞 Raqam: {phone_display}", callback_data="health_edit_phone")]
+    if cfg['phone']:
+        phone_row.append(InlineKeyboardButton("🗑 O'chirish", callback_data="health_clear_phone"))
     keyboard = [
-        [
-            InlineKeyboardButton(f"📞 Raqam: {phone_display}", callback_data="health_edit_phone"),
-        ],
+        phone_row,
         [
             InlineKeyboardButton(f"⏱ Interval: {cfg['interval']} daqiqa", callback_data="health_edit_interval"),
         ],
@@ -2465,13 +2472,14 @@ async def handle_health_input(update, context) -> bool:
     text = (update.message.text or '').strip()
     from .models import AdminSettings
 
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
     if field == 'phone':
         if not text.startswith('+') or len(text) < 7:
             await update.message.reply_text("❌ Raqam + bilan boshlanishi kerak. Masalan: +998901234567")
             return True
         AdminSettings.set_health_config(phone=text)
         context.user_data.pop('waiting_health_field', None)
-        await update.message.reply_text(f"✅ Ogohlantirish raqami saqlandi: <b>{text}</b>", parse_mode='HTML')
 
     elif field == 'interval':
         try:
@@ -2483,8 +2491,19 @@ async def handle_health_input(update, context) -> bool:
             return True
         AdminSettings.set_health_config(interval=mins)
         context.user_data.pop('waiting_health_field', None)
-        await update.message.reply_text(f"✅ Tekshirish oralig'i: <b>{mins} daqiqa</b>", parse_mode='HTML')
 
+    else:
+        return True
+
+    cfg = AdminSettings.get_health_config()
+    keyboard = [[InlineKeyboardButton("🌐 API monitoring sozlamalari", callback_data="settings_health_config")]]
+    await update.message.reply_text(
+        f"✅ Saqlandi!\n\n"
+        f"📞 Raqam: <b>{cfg['phone'] or '—'}</b>\n"
+        f"⏱ Interval: <b>{cfg['interval']} daqiqa</b>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return True
 
 
@@ -2514,9 +2533,15 @@ async def handle_stats_time_input(update, context) -> bool:
         'period_end': 'Tugash vaqti',
         'send_time': 'Yuborish vaqti',
     }
+    from .models import AdminSettings as _AS
+    cfg = _AS.get_stats_config()
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    keyboard = [[InlineKeyboardButton("📊 Statistika sozlamalari", callback_data="settings_stats_config")]]
     await update.message.reply_text(
-        f"✅ {field_names.get(field, field)}: <b>{h:02d}:{m:02d}</b> saqlandi.",
-        parse_mode='HTML'
+        f"✅ {field_names.get(field, field)}: <b>{h:02d}:{m:02d}</b> saqlandi.\n\n"
+        f"▶️ {cfg['period_start']} — ⏹ {cfg['period_end']} | 📤 {cfg['send_time']}",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
     return True
 

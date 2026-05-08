@@ -10,7 +10,9 @@ ALERT_TRACKER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'aler
 SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summary_msg.json')
 CALL_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'call_log.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
-
+WAIT_BEFORE_CALL = int(os.getenv('WAIT_BEFORE_CALL', 90))
+MAX_CALL_ATTEMPTS = int(os.getenv('MAX_CALL_ATTEMPTS', 2))
+RETRY_INTERVAL = int(os.getenv('RETRY_INTERVAL', 30))
 
 
 def _load_alert_tracker():
