@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 ALERT_TRACKER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'alert_tracker.json')
 SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summary_msg.json')
+CALL_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'call_log.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
 
 
@@ -38,8 +39,40 @@ def _save_summary_msg(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _load_call_log():
+    if os.path.exists(CALL_LOG_FILE):
+        with open(CALL_LOG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return []
+
+
+def _save_call_log(data):
+    os.makedirs(os.path.dirname(CALL_LOG_FILE), exist_ok=True)
+    with open(CALL_LOG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def log_ami_call(seller_id: str, seller_name: str, phone: str, success: bool):
+    """AMI qo'ng'iroqni logga yozish (daily stats uchun)"""
+    log = _load_call_log()
+    log.append({
+        'seller_id': seller_id,
+        'seller_name': seller_name,
+        'phone': phone,
+        'called_at': datetime.now().isoformat(),
+        'success': success,
+    })
+    # 7 kundan eski yozuvlarni tozalash
+    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    log = [e for e in log if e.get('called_at', '') >= cutoff]
+    _save_call_log(log)
+
+
 # Oxirgi yuborilgan summary matni — o'zgarish bo'lmasa edit qilmaymiz
 _last_summary_text = ''
+
+# Bugun statistika yuborilganmi (ikki marta yuborilmasin)
+_stats_sent_today: str = ''
 
 
 async def update_admin_group_summary():
@@ -862,3 +895,238 @@ async def check_missed_orders():
 
     if tracker_updated:
         _save_alert_tracker(tracker)
+
+
+async def check_and_call_sellers():
+    """WAIT_BEFORE_CALL sekunddan keyin Asterisk AMI orqali qo'ng'iroq (faqat CHECKING buyurtmalar)"""
+    from .models import Seller, Order
+    from .services.asterisk import ami_make_call
+
+    now = datetime.now()
+    call_threshold = timedelta(seconds=WAIT_BEFORE_CALL)
+    all_orders = Order.load_all()
+    tracker = _load_alert_tracker()
+    tracker_updated = False
+
+    seller_orders: dict = {}
+    for od in all_orders:
+        if od.get('status') != 'new':
+            continue
+        notified_at = od.get('notified_at')
+        if not notified_at:
+            continue
+        try:
+            t = datetime.fromisoformat(notified_at)
+        except ValueError:
+            continue
+        if now - t < call_threshold:
+            continue
+        sid = od.get('seller_id', '')
+        seller_orders.setdefault(sid, []).append(od)
+
+    for seller_id, orders in seller_orders.items():
+        seller = Seller.get(id=seller_id)
+        if not seller or not seller.phone:
+            continue
+
+        entry = tracker.get(str(seller_id), {})
+        call_count = entry.get('call_count', 0)
+        last_call_at = entry.get('last_call_at')
+
+        if call_count >= MAX_CALL_ATTEMPTS:
+            continue
+
+        if last_call_at:
+            try:
+                elapsed = (now - datetime.fromisoformat(last_call_at)).total_seconds()
+                if elapsed < RETRY_INTERVAL:
+                    continue
+            except ValueError:
+                pass
+
+        logger.info(f"Qo'ng'iroq: {seller.full_name} ({seller.phone}), urinish #{call_count + 1}")
+        success = await ami_make_call(seller.phone)
+        log_ami_call(str(seller_id), seller.full_name, seller.phone, success)
+
+        if success:
+            call_count += 1
+            tracker.setdefault(str(seller_id), {})
+            tracker[str(seller_id)]['call_count'] = call_count
+            tracker[str(seller_id)]['last_call_at'] = now.isoformat()
+            tracker_updated = True
+
+            if tracker[str(seller_id)].get('message_id') and tracker[str(seller_id)].get('chat_id'):
+                try:
+                    from .models import AdminSettings
+                    admin_group_id = AdminSettings.get_admin_group_chat_id()
+                    if admin_group_id:
+                        from .models import Order as OrderModel
+                        missed = [OrderModel.from_dict(o) for o in orders]
+                        seller_obj = seller
+                        alert_text = _format_missed_alert(seller_obj, missed, call_count=call_count)
+                        tg_bot = NotificationBot().bot
+                        await tg_bot.edit_message_text(
+                            chat_id=int(tracker[str(seller_id)]['chat_id']),
+                            message_id=int(tracker[str(seller_id)]['message_id']),
+                            text=alert_text,
+                            parse_mode='HTML'
+                        )
+                except TelegramError as e:
+                    if 'message is not modified' not in str(e).lower():
+                        logger.warning(f"Alert yangilashda xato: {e}")
+                except Exception as e:
+                    logger.warning(f"Alert yangilashda xato: {e}")
+        else:
+            logger.warning(f"Qo'ng'iroq muvaffaqiyatsiz: {seller.full_name} ({seller.phone})")
+
+    if tracker_updated:
+        _save_alert_tracker(tracker)
+
+
+async def generate_and_send_daily_stats():
+    """Kunlik statistikani yaratib admin va admin guruhga yuborish"""
+    global _stats_sent_today
+    from .models import Order, Seller, AdminSettings
+
+    config = AdminSettings.get_stats_config()
+    period_start_str = config.get('period_start', '22:30')
+    period_end_str = config.get('period_end', '08:00')
+    send_time_str = config.get('send_time', '08:05')
+
+    now = datetime.now()
+    current_time_str = now.strftime('%H:%M')
+
+    # Bugun allaqachon yuborilganmi
+    today_key = now.strftime('%Y-%m-%d') + '_' + send_time_str
+    if _stats_sent_today == today_key:
+        return
+
+    if current_time_str != send_time_str:
+        return
+
+    # Davr hisoblash
+    # period_start > period_end → tun oshib o'tadi (22:30 → 08:00)
+    def parse_time(s):
+        h, m = map(int, s.split(':'))
+        return h * 60 + m
+
+    start_min = parse_time(period_start_str)
+    end_min = parse_time(period_end_str)
+
+    period_end_dt = now.replace(hour=int(period_end_str.split(':')[0]),
+                                minute=int(period_end_str.split(':')[1]),
+                                second=0, microsecond=0)
+    if start_min > end_min:
+        # tun oshadi: start kechasi, end ertalab
+        period_start_dt = (period_end_dt - timedelta(days=1)).replace(
+            hour=int(period_start_str.split(':')[0]),
+            minute=int(period_start_str.split(':')[1]),
+            second=0, microsecond=0
+        )
+    else:
+        period_start_dt = period_end_dt.replace(
+            hour=int(period_start_str.split(':')[0]),
+            minute=int(period_start_str.split(':')[1])
+        )
+
+    # Buyurtmalarni davr bo'yicha filtrlash
+    all_orders = Order.load_all()
+    period_orders = []
+    for od in all_orders:
+        notified_at = od.get('notified_at', '')
+        if not notified_at:
+            continue
+        try:
+            t = datetime.fromisoformat(notified_at)
+            if period_start_dt <= t <= period_end_dt:
+                period_orders.append(od)
+        except ValueError:
+            continue
+
+    # AMI qo'ng'iroq logi
+    call_log = _load_call_log()
+    period_calls = [
+        c for c in call_log
+        if period_start_dt.isoformat() <= c.get('called_at', '') <= period_end_dt.isoformat()
+    ]
+
+    # Statistika hisoblash
+    total = len(period_orders)
+    accepted = sum(1 for o in period_orders if o.get('status') == 'accepted')
+    rejected = sum(1 for o in period_orders if o.get('status') == 'rejected')
+    unanswered = sum(1 for o in period_orders if o.get('status') == 'new')
+
+    # Seller bo'yicha guruhlash
+    seller_stats: dict = {}
+    for od in period_orders:
+        sid = od.get('seller_id', 'unknown')
+        if sid not in seller_stats:
+            s = Seller.get(id=sid)
+            seller_stats[sid] = {
+                'name': s.full_name if s else f'#{sid[:8]}',
+                'total': 0, 'accepted': 0, 'rejected': 0, 'new': 0,
+                'calls': 0, 'calls_success': 0,
+            }
+        seller_stats[sid]['total'] += 1
+        status = od.get('status', 'new')
+        seller_stats[sid][status if status in ('accepted', 'rejected') else 'new'] += 1
+
+    for c in period_calls:
+        sid = c.get('seller_id', '')
+        if sid in seller_stats:
+            seller_stats[sid]['calls'] += 1
+            if c.get('success'):
+                seller_stats[sid]['calls_success'] += 1
+
+    # Xabar formatlash
+    date_label = period_start_dt.strftime('%d.%m.%Y %H:%M') + ' — ' + period_end_dt.strftime('%d.%m.%Y %H:%M')
+    lines = [
+        f"📊 <b>KUNLIK STATISTIKA</b>\n"
+        f"🕐 {date_label}\n\n"
+        f"📦 Jami buyurtmalar: <b>{total} ta</b>\n"
+        f"✅ Qabul qilingan: <b>{accepted} ta</b>\n"
+        f"❌ Bekor qilingan: <b>{rejected} ta</b>\n"
+        f"⏳ Javobsiz: <b>{unanswered} ta</b>\n"
+    ]
+
+    if seller_stats:
+        lines.append("\n<b>━━━ RESTORANLAR ━━━</b>\n")
+        for i, (sid, s) in enumerate(seller_stats.items(), 1):
+            call_info = ''
+            if s['calls'] > 0:
+                if s['calls_success'] > 0:
+                    call_info = f"   📞 {s['calls']} marta qo'ng'iroq — javob berdi\n"
+                else:
+                    call_info = f"   📞 {s['calls']} marta qo'ng'iroq — javob bermadi\n"
+            lines.append(
+                f"{i}. <b>{s['name']}</b>\n"
+                f"   📦 {s['total']} ta buyurtma"
+                f" | ✅{s['accepted']} ❌{s['rejected']} ⏳{s['new']}\n"
+                f"{call_info}"
+            )
+
+    text = "".join(lines)
+
+    # Yuborish
+    admin_group_id = AdminSettings.get_admin_group_chat_id()
+    admin_ids = [aid.strip() for aid in os.getenv('ADMIN_IDS', '').split(',') if aid.strip()]
+    tg_bot = NotificationBot().bot
+
+    sent = False
+    if admin_group_id:
+        try:
+            await tg_bot.send_message(chat_id=int(admin_group_id), text=text, parse_mode='HTML')
+            sent = True
+        except TelegramError as e:
+            logger.error(f"Daily stats guruhga yuborishda xato: {e}")
+
+    for admin_id in admin_ids:
+        try:
+            await tg_bot.send_message(chat_id=int(admin_id), text=text, parse_mode='HTML')
+            sent = True
+        except TelegramError as e:
+            logger.error(f"Daily stats adminga yuborishda xato: {e}")
+
+    if sent:
+        _stats_sent_today = today_key
+        logger.info(f"Kunlik statistika yuborildi ({total} buyurtma, {period_start_str}-{period_end_str})")

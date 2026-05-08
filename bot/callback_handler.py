@@ -233,6 +233,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Admin guruh o'chirildi!", show_alert=True)
         await show_admin_settings(query)
 
+    elif data == "settings_stats_config":
+        await show_stats_config(query)
+
+    elif data == "stats_edit_period_start":
+        context.user_data['waiting_stats_field'] = 'period_start'
+        await ask_stats_time(query, "Statistika <b>boshlanish vaqti</b>ni kiriting\n<i>Masalan: 22:30</i>")
+
+    elif data == "stats_edit_period_end":
+        context.user_data['waiting_stats_field'] = 'period_end'
+        await ask_stats_time(query, "Statistika <b>tugash vaqti</b>ni kiriting\n<i>Masalan: 08:00</i>")
+
+    elif data == "stats_edit_send_time":
+        context.user_data['waiting_stats_field'] = 'send_time'
+        await ask_stats_time(query, "Statistika <b>yuborish vaqti</b>ni kiriting\n<i>Masalan: 08:05</i>")
+
+    elif data == "stats_send_now":
+        await query.answer("Statistika yuborilmoqda...", show_alert=False)
+        from .core import generate_and_send_daily_stats
+        from .models import AdminSettings
+        # Vaqt tekshiruvini bypass qilib to'g'ridan-to'g'ri yuborish
+        import bot.core as _core
+        prev = _core._stats_sent_today
+        _core._stats_sent_today = ''
+        cfg = AdminSettings.get_stats_config()
+        _core._stats_sent_today = ''
+        # send_time ni hozirgi vaqtga o'rnatib yuborish
+        now_str = __import__('datetime').datetime.now().strftime('%H:%M')
+        AdminSettings.set_stats_config(send_time=now_str)
+        await generate_and_send_daily_stats()
+        AdminSettings.set_stats_config(send_time=cfg['send_time'])
+        _core._stats_sent_today = prev
+        await show_stats_config(query)
+
     elif data == "admin_test":
         await show_test_order_businesses(query, 0)
 
@@ -2271,10 +2304,15 @@ async def show_admin_settings(query):
     else:
         group_info = "❌ <b>Admin guruh:</b> ulanmagan"
 
+    stats_cfg = AdminSettings.get_stats_config()
+
     keyboard = [
         [
             InlineKeyboardButton("🔍 Qidirish", callback_data="settings_search"),
             InlineKeyboardButton("👥 Admin guruh ulash", callback_data="settings_admin_group"),
+        ],
+        [
+            InlineKeyboardButton("📊 Statistika vaqti", callback_data="settings_stats_config"),
         ],
     ]
     if admin_group_id:
@@ -2288,10 +2326,84 @@ async def show_admin_settings(query):
     await query.message.edit_text(
         f"⚙️ <b>Sozlamalar</b>\n\n"
         f"{group_info}\n\n"
+        f"📊 <b>Kunlik statistika:</b>\n"
+        f"  Davr: {stats_cfg['period_start']} — {stats_cfg['period_end']}\n"
+        f"  Yuborish vaqti: {stats_cfg['send_time']}\n\n"
         f"<i>Admin guruhga barcha buyurtmalar haqida xabar yuboriladi.</i>",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def show_stats_config(query):
+    """Kunlik statistika sozlamalari"""
+    from .models import AdminSettings
+    cfg = AdminSettings.get_stats_config()
+    keyboard = [
+        [
+            InlineKeyboardButton(f"▶️ Boshlanish: {cfg['period_start']}", callback_data="stats_edit_period_start"),
+            InlineKeyboardButton(f"⏹ Tugash: {cfg['period_end']}", callback_data="stats_edit_period_end"),
+        ],
+        [
+            InlineKeyboardButton(f"📤 Yuborish: {cfg['send_time']}", callback_data="stats_edit_send_time"),
+        ],
+        [
+            InlineKeyboardButton("📊 Hozir yuborish", callback_data="stats_send_now"),
+            InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
+        ],
+    ]
+    await query.message.edit_text(
+        f"📊 <b>Kunlik statistika sozlamalari</b>\n\n"
+        f"▶️ Davr boshlanishi: <b>{cfg['period_start']}</b>\n"
+        f"⏹ Davr tugashi: <b>{cfg['period_end']}</b>\n"
+        f"📤 Yuborish vaqti: <b>{cfg['send_time']}</b>\n\n"
+        f"<i>Har kuni {cfg['send_time']} da {cfg['period_start']}—{cfg['period_end']} oralig'idagi statistika yuboriladi.</i>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def ask_stats_time(query, prompt: str):
+    """Vaqt kiritishni so'rash"""
+    keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_stats_config")]]
+    await query.message.edit_text(
+        f"🕐 <b>Vaqt kiriting</b>\n\n{prompt}",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def handle_stats_time_input(update, context) -> bool:
+    """Statistika vaqt sozlamasini qabul qilish (HH:MM format)"""
+    field = context.user_data.get('waiting_stats_field')
+    if not field:
+        return False
+
+    text = (update.message.text or '').strip()
+    import re
+    if not re.match(r'^\d{1,2}:\d{2}$', text):
+        await update.message.reply_text("❌ Noto'g'ri format. HH:MM kiriting (masalan: 08:05)")
+        return True
+
+    h, m = map(int, text.split(':'))
+    if not (0 <= h <= 23 and 0 <= m <= 59):
+        await update.message.reply_text("❌ Noto'g'ri vaqt. 00:00 — 23:59 oralig'ida kiriting.")
+        return True
+
+    from .models import AdminSettings
+    AdminSettings.set_stats_config(**{field: f"{h:02d}:{m:02d}"})
+    context.user_data.pop('waiting_stats_field', None)
+
+    field_names = {
+        'period_start': 'Boshlanish vaqti',
+        'period_end': 'Tugash vaqti',
+        'send_time': 'Yuborish vaqti',
+    }
+    await update.message.reply_text(
+        f"✅ {field_names.get(field, field)}: <b>{h:02d}:{m:02d}</b> saqlandi.",
+        parse_mode='HTML'
+    )
+    return True
 
 
 async def ask_admin_group(query, context):

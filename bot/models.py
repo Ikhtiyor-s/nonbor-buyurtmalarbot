@@ -423,7 +423,7 @@ class AdminSettings:
 
     @classmethod
     def get_admin_group_chat_id(cls):
-        return cls.get('admin_group_chat_id')
+        return cls.get('admin_group_chat_id') or os.getenv('ADMIN_GROUP_ID')
 
     @classmethod
     def get_admin_group_title(cls):
@@ -441,6 +441,25 @@ class AdminSettings:
         data = cls._load()
         data.pop('admin_group_chat_id', None)
         data.pop('admin_group_title', None)
+        cls._save(data)
+
+    @classmethod
+    def get_stats_config(cls) -> dict:
+        return {
+            'period_start': cls.get('stats_period_start', '22:30'),
+            'period_end':   cls.get('stats_period_end',   '08:00'),
+            'send_time':    cls.get('stats_send_time',    '08:05'),
+        }
+
+    @classmethod
+    def set_stats_config(cls, period_start=None, period_end=None, send_time=None):
+        data = cls._load()
+        if period_start is not None:
+            data['stats_period_start'] = period_start
+        if period_end is not None:
+            data['stats_period_end'] = period_end
+        if send_time is not None:
+            data['stats_send_time'] = send_time
         cls._save(data)
 
 

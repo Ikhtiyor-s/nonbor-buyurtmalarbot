@@ -60,6 +60,24 @@ async def check_missed_orders_job(context):
 
 
 
+async def call_sellers_job(context):
+    """Asterisk AMI orqali qabul qilinmagan buyurtmalar uchun qo'ng'iroq"""
+    from .core import check_and_call_sellers
+    try:
+        await check_and_call_sellers()
+    except Exception as e:
+        logger.error(f"Call sellers error: {e}")
+
+
+async def daily_stats_job(context):
+    """Kunlik statistikani yuborish (har daqiqa vaqtni tekshiradi)"""
+    from .core import generate_and_send_daily_stats
+    try:
+        await generate_and_send_daily_stats()
+    except Exception as e:
+        logger.error(f"Daily stats error: {e}")
+
+
 async def sync_businesses_job(context):
     """Nonbor API dan bizneslarni sellers.json ga sync qilish"""
     from .core import sync_businesses_from_api
@@ -230,7 +248,7 @@ def run_bot():
     # Callbacks - dashboard callbacklarini alohida handle qilish
     application.add_handler(CallbackQueryHandler(
         handle_dashboard_callback,
-        pattern="^(dash_|stats_|staff_|setrole_|confirmremove_|doremove_|otp_|change_phone|seller_stats_|seller_staff_|seller_back_|add_staff_|remove_staff|rmstaff_|delstaff_|staff_role)"
+        pattern="^(dash_|stats_today|stats_week|stats_month|staff_|setrole_|confirmremove_|doremove_|otp_|change_phone|seller_stats_|seller_staff_|seller_back_|add_staff_|remove_staff|rmstaff_|delstaff_|staff_role)"
     ))
 
     # Boshqa callbacklar
@@ -268,6 +286,9 @@ def run_bot():
         # Admin - guruh ID qabul qilish
         if await handlers.handle_group_id_message(update, context):
             return
+        # Statistika vaqt sozlamasi
+        if await callback_handler.handle_stats_time_input(update, context):
+            return
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
@@ -294,7 +315,25 @@ def run_bot():
     )
     print("\nMissed orders alert faollashtirildi (har 5 sek tekshiriladi)")
 
-# Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
+    # Asterisk AMI qo'ng'iroq (har 15 sekundda)
+    job_queue.run_repeating(
+        call_sellers_job,
+        interval=15,
+        first=20,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 15}
+    )
+    print("\nAsterisk AMI autodialer faollashtirildi (har 15 sek)")
+
+    # Kunlik statistika (har daqiqa vaqtni tekshiradi)
+    job_queue.run_repeating(
+        daily_stats_job,
+        interval=60,
+        first=30,
+        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
+    )
+    print("\nKunlik statistika faollashtirildi (har daqiqa tekshiriladi)")
+
+    # Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
     job_queue.run_repeating(
         sync_businesses_job,
         interval=300,
