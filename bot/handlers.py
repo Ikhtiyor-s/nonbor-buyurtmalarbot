@@ -196,13 +196,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         # Yangi foydalanuvchi - telefon so'rash
-        # Context ga kutish holatini saqlash
         context.user_data['waiting_phone_registration'] = True
 
         await update.message.reply_text(
             f"👋 <b>Salom, {user.first_name}!</b>\n\n"
-            f"Bu bot orqali guruhingizni Nonbor buyurtma tizimiga ulashingiz mumkin.\n\n"
-            f"📱 <b>Ro'yxatdan o'tish uchun Nonbor platformasida ro'yxatdan o'tgan telefon raqamingizni yuboring:</b>\n\n"
+            f"Davom etish uchun telefon raqamingizni yuboring:\n\n"
             f"<i>Masalan: +998901234567</i>",
             parse_mode='HTML'
         )
@@ -1915,6 +1913,31 @@ async def handle_private_phone_registration(update: Update, context: ContextType
     waiting_registration = context.user_data.get('waiting_phone_registration')
 
     if waiting_registration:
+        # Admin telefon raqami tekshirish — avvalroq
+        from .models import AdminSettings, PhoneRegistry as PR
+        admin_phones = AdminSettings.get_admin_phones()
+        if clean_phone in admin_phones:
+            # Admin sifatida ro'yxatdan o'tkazish
+            existing_pr = PR.get_by_phone(clean_phone)
+            if not existing_pr:
+                pr = PR(phone=clean_phone, telegram_user_id=str(user.id),
+                        full_name=user.full_name or user.first_name or '')
+                pr.save()
+            AdminSettings.add_extra_admin_id(str(user.id))
+            context.user_data.pop('waiting_phone_registration', None)
+            # Admin panelini ko'rsatish
+            from .models import AdminSettings as AS
+            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+            kb = [[InlineKeyboardButton("⚙️ Admin panel", callback_data="back_admin")]]
+            await update.message.reply_text(
+                f"✅ <b>Admin sifatida tasdiqlandi!</b>\n\n"
+                f"📞 Raqam: <code>{clean_phone}</code>\n\n"
+                f"Endi admin panelidan foydalanishingiz mumkin.",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(kb)
+            )
+            return True
+
         from .models import Seller
 
         # ==========================================
