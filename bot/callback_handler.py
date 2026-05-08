@@ -2414,17 +2414,62 @@ async def show_order_detail(query, order_id: str):
 
 
 async def show_calls_list(query, period="daily", status="all", page=0):
-    """Qo'ng'iroqlar ro'yxati — davr + status filtri"""
+    """Qo'ng'iroqlar ro'yxati — call_log.json dan"""
+    from bot.core import _load_call_log
+
+    ITEMS_PER_PAGE = 10
     now = datetime.now()
     period_name = PERIOD_NAMES.get(period, period)
-    status_name = STATUS_GROUPS.get(status, ("Barchasi", None))[0]
+
+    # Davr bo'yicha filtrlash
+    all_calls, period_start = _filter_by_period(
+        [{**c, 'created_at': c.get('called_at', '')} for c in _load_call_log()],
+        period
+    )
+
+    # Status filtri: "all" barchasi, "accepted"=javob berdi, boshqasi=javob bermadi
+    if status == 'accepted':
+        filtered = [c for c in all_calls if c.get('success')]
+    elif status in ('rejected', 'cancelled'):
+        filtered = [c for c in all_calls if not c.get('success')]
+    else:
+        filtered = all_calls
+
+    total = len(filtered)
+    answered = sum(1 for c in filtered if c.get('success'))
+    missed = total - answered
+
+    total_pages = max(1, (total + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
+    page = max(0, min(page, total_pages - 1))
+    start_idx = page * ITEMS_PER_PAGE
+    page_items = list(reversed(filtered))[start_idx: start_idx + ITEMS_PER_PAGE]
+
+    date_range = (
+        f"{period_start.strftime('%d.%m.%Y')} - {now.strftime('%d.%m.%Y')}"
+        if period_start else now.strftime('%d.%m.%Y')
+    )
 
     text = (
-        f"📞 <b>QO'NG'IROQLAR</b> — {period_name} | {status_name}\n"
-        f"📊 Jami: <b>0 ta</b>\n\n"
-        f"<i>Qo'ng'iroqlar ma'lumotlari hali mavjud emas.</i>"
+        f"📞 <b>QO'NG'IROQLAR</b> — {period_name}\n"
+        f"📊 Jami: <b>{total} ta</b> | ✅ {answered} | ❌ {missed}\n"
+        f"📆 {date_range}\n"
     )
-    keyboard = _orders_keyboard("calls", period, status, 0, 1)
+    if total_pages > 1:
+        text += f"📄 Sahifa: {page + 1}/{total_pages}\n"
+    text += "\n"
+
+    for i, c in enumerate(page_items, start_idx + 1):
+        icon = "✅" if c.get('success') else "❌"
+        name = (c.get('seller_name') or '—')[:16]
+        phone = c.get('phone', '—')
+        called_at = c.get('called_at', '')[:16].replace('T', ' ')
+        text += f"{i}. {icon} <b>{name}</b>\n"
+        text += f"    📞 {phone} | 🕐 {called_at}\n"
+
+    if not page_items:
+        text += "<i>Bu davrda qo'ng'iroqlar yo'q</i>\n"
+
+    keyboard = _orders_keyboard("calls", period, status, page, total_pages)
     await query.message.edit_text(text, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
 
 
