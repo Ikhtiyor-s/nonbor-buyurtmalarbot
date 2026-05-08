@@ -265,6 +265,12 @@ def run_bot():
 
     # Message handler for group ID input, phone edit, and group registration
     async def message_handler(update, context):
+        # Statistika vaqt sozlamasi (oldin tekshirish — boshqa handlerlar ushlab olmasin)
+        if await callback_handler.handle_stats_time_input(update, context):
+            return
+        # API health monitoring sozlamasi (oldin tekshirish)
+        if await callback_handler.handle_health_input(update, context):
+            return
         # Admin text input (buyurtma qidirish, shablon yaratish/tahrirlash)
         if await handlers.handle_admin_text_input(update, context):
             return
@@ -294,12 +300,6 @@ def run_bot():
             return
         # Admin - guruh ID qabul qilish
         if await handlers.handle_group_id_message(update, context):
-            return
-        # Statistika vaqt sozlamasi
-        if await callback_handler.handle_stats_time_input(update, context):
-            return
-        # API health monitoring sozlamasi
-        if await callback_handler.handle_health_input(update, context):
             return
 
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
