@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 logger = logging.getLogger('webhooks')
 
@@ -250,4 +250,130 @@ def order_status(request):
 
     except Exception as e:
         logger.exception(f"order_status API xato: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@require_GET
+def admin_alert(request):
+    """
+    Server (Nonbor API) ishlamayotganda Asterisk adminga qo'ng'iroq qilishi kerakmi?
+
+    GET /api/admin-alert/
+    Header: X-Telegram-Bot-Secret: nonbor-secret-key
+
+    Javob (normal holat):
+    {
+      "call_admin": false,
+      "reason": null,
+      "admin_phone": "+998..."
+    }
+
+    Javob (API ishlamayotganda):
+    {
+      "call_admin": true,
+      "reason": "Nonbor API 15 daqiqadan beri ishlamayapti",
+      "admin_phone": "+998948679300",
+      "down_since": "2026-05-09T22:00:00",
+      "already_acked": false
+    }
+
+    Asterisk bu endpointni har daqiqada so'raydi.
+    call_admin=true bo'lsa adminni chaqiradi, keyin /api/admin-alert/ack/ ga POST yuboradi.
+    """
+    if not _check_auth(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    try:
+        from bot.core import _api_health
+        from bot.models import AdminSettings
+
+        cfg = AdminSettings.get_health_config()
+        admin_phone = cfg.get('phone', '')
+
+        is_down = _api_health.get('is_down', False)
+        down_since = _api_health.get('down_since')
+        acked = _api_health.get('admin_call_acked', False)
+
+        if not is_down:
+            return JsonResponse({
+                'call_admin': False,
+                'reason': None,
+                'admin_phone': admin_phone,
+            })
+
+        reason = 'Nonbor API ishlamayapti'
+        if down_since:
+            try:
+                mins = int((datetime.now() - datetime.fromisoformat(down_since)).total_seconds() / 60)
+                reason = f"Nonbor API {mins} daqiqadan beri ishlamayapti"
+            except Exception:
+                pass
+
+        return JsonResponse({
+            'call_admin': True,
+            'reason': reason,
+            'admin_phone': admin_phone,
+            'down_since': down_since,
+            'already_acked': acked,
+        })
+
+    except Exception as e:
+        logger.exception(f"admin_alert API xato: {e}")
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+@csrf_exempt
+@require_POST
+def admin_alert_ack(request):
+    """
+    Asterisk adminga qo'ng'iroq qilganini bildiradi (acknowledgment).
+
+    POST /api/admin-alert/ack/
+    Header: X-Telegram-Bot-Secret: nonbor-secret-key
+    Body: {"answered": true, "duration": 30}
+
+    Bu qayta call_admin=false qilib qo'yadi (30 daqiqaga).
+    """
+    if not _check_auth(request):
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    try:
+        data = {}
+        try:
+            data = json.loads(request.body)
+        except Exception:
+            pass
+
+        answered = bool(data.get('answered', True))
+        duration = int(data.get('duration', 0))
+
+        from bot.core import _api_health, log_ami_call
+        from bot.models import AdminSettings
+
+        cfg = AdminSettings.get_health_config()
+        admin_phone = cfg.get('phone', '')
+
+        # Qo'ng'iroqni logga yozish
+        if admin_phone:
+            log_ami_call(
+                seller_id='admin',
+                seller_name='ADMIN',
+                phone=admin_phone,
+                success=answered,
+            )
+
+        # 30 daqiqaga yana chaqirmaslik uchun flag
+        _api_health['admin_call_acked'] = True
+        _api_health['admin_call_acked_at'] = datetime.now().isoformat()
+
+        logger.info(f"Admin alert ACK: answered={answered}, duration={duration}s")
+
+        return JsonResponse({
+            'status': 'ok',
+            'answered': answered,
+            'next_check_in_minutes': 30,
+        })
+
+    except Exception as e:
+        logger.exception(f"admin_alert_ack API xato: {e}")
         return JsonResponse({'error': str(e)}, status=500)

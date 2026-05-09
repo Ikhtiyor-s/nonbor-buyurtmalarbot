@@ -1574,6 +1574,7 @@ async def check_api_health():
 
         _api_health['is_down'] = False
         _api_health['down_since'] = None
+        _api_health['admin_call_acked'] = False
         return
 
     # API ishlamayapti
