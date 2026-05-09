@@ -10,6 +10,7 @@ ALERT_TRACKER_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'aler
 SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summary_msg.json')
 CALL_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'call_log.json')
 ORDER_HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'order_history.json')
+SENT_ORDERS_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'sent_orders.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
 WAIT_BEFORE_CALL = int(os.getenv('WAIT_BEFORE_CALL', 90))
 MAX_CALL_ATTEMPTS = int(os.getenv('MAX_CALL_ATTEMPTS', 2))
@@ -269,8 +270,28 @@ logger = logging.getLogger(__name__)
 # Buyurtma muddati (daqiqada) - shu vaqtdan keyin o'chiriladi
 ORDER_EXPIRY_MINUTES = int(os.getenv('ORDER_EXPIRY_MINUTES', 30))
 
-# Yuborilgan buyurtmalar (qayta yuborilmasligi uchun)
-sent_orders = set()
+def _load_sent_orders() -> set:
+    """Restart dan keyin ham sent_orders saqlanib qolsin"""
+    if os.path.exists(SENT_ORDERS_FILE):
+        try:
+            with open(SENT_ORDERS_FILE, 'r') as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+
+def _save_sent_orders():
+    try:
+        os.makedirs(os.path.dirname(SENT_ORDERS_FILE), exist_ok=True)
+        with open(SENT_ORDERS_FILE, 'w') as f:
+            json.dump(list(sent_orders), f)
+    except Exception as e:
+        logger.warning(f"sent_orders saqlashda xato: {e}")
+
+
+# Yuborilgan buyurtmalar — fayldan yuklanadi (restart da yo'qolmaydi)
+sent_orders: set = _load_sent_orders()
 # AmoCRM dan yuborilgan leadlar
 sent_amocrm_leads = set()
 
@@ -785,18 +806,19 @@ async def fetch_and_send_orders():
         states_found = {o.get('state', '') for o in orders}
         logger.info(f"Orders API: total={total_count}, fetched={len(orders)}, states={states_found}")
 
-        # Faqat CHECKING holatidagi orderlar aktiv hisoblanadi
-        active_api_ids = {
-            str(o.get('id')) for o in orders
-            if (o.get('state') or '').upper() == 'CHECKING'
-        }
-
         for order in orders:
             _archive_order_from_api(order)
             await _process_single_order(order)
 
-        # CHECKING dan chiqib ketgan buyurtmalarning xabarini o'chirish
+        # CHECKING dan chiqib ketgan buyurtmalar xabarini o'chirish
+        # Faqat API muvaffaqiyatli ishlaganda (exception bo'lmagan) ishlaydi
+        active_api_ids = {
+            str(o.get('id')) for o in orders
+            if (o.get('state') or '').upper() == 'CHECKING'
+        }
         await _delete_finished_order_messages(active_api_ids)
+
+        _save_sent_orders()
 
     except Exception as e:
         logger.exception(f"Error fetching orders: {e}")
