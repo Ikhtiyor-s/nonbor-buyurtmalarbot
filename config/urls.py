@@ -5,4 +5,5 @@ from django.urls import path, include
 
 urlpatterns = [
     path('webhook/', include('webhooks.urls')),
+    path('api/', include('webhooks.api_urls')),
 ]
