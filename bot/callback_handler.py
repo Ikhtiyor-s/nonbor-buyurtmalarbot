@@ -2673,8 +2673,10 @@ async def show_admin_group_menu(query):
     del_label = f"🗑 Avtomatik o'chirish: {delete_after} sek" if delete_after > 0 else "🗑 Avtomatik o'chirish: o'chirilmaydi"
 
     keyboard += [
-        [InlineKeyboardButton(send_label, callback_data="admin_msg_edit_delay")],
-        [InlineKeyboardButton(del_label, callback_data="admin_msg_edit_delete")],
+        [
+            InlineKeyboardButton(send_label, callback_data="admin_msg_edit_delay"),
+            InlineKeyboardButton(del_label, callback_data="admin_msg_edit_delete"),
+        ],
         [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
     ]
 
