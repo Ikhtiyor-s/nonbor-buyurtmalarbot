@@ -593,9 +593,9 @@ async def _process_single_order(order: dict) -> bool:
         return False
 
     state = (order.get('state') or '').upper()
-    # Yangi buyurtma statelari — guruhga yuborish kerak bo'lganlar
-    ACTIVE_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
-    if state and state not in ACTIVE_STATES:
+    # Faqat CHECKING (rasmiylashtirilmoqda) holatidagi buyurtmalar
+    # PENDING = Savatda — bu buyurtmalar guruhga yuborilmaydi
+    if state != 'CHECKING':
         sent_orders.add(order_id)
         return False
 
@@ -785,11 +785,10 @@ async def fetch_and_send_orders():
         states_found = {o.get('state', '') for o in orders}
         logger.info(f"Orders API: total={total_count}, fetched={len(orders)}, states={states_found}")
 
-        ACTIVE_STATES = {'CHECKING', 'PENDING', 'NEW', 'CREATED'}
-        # API dagi hozirgi faol order IDlari
+        # Faqat CHECKING holatidagi orderlar aktiv hisoblanadi
         active_api_ids = {
             str(o.get('id')) for o in orders
-            if (o.get('state') or '').upper() in ACTIVE_STATES
+            if (o.get('state') or '').upper() == 'CHECKING'
         }
 
         for order in orders:
