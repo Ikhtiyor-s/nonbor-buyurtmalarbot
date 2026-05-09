@@ -449,6 +449,22 @@ class AdminSettings:
         cls._save(data)
 
     @classmethod
+    def get_admin_msg_config(cls) -> dict:
+        return {
+            'send_delay':    int(cls.get('admin_msg_send_delay', 0)),     # soniya
+            'delete_after':  int(cls.get('admin_msg_delete_after', 0)),   # soniya (0 = o'chirmaslik)
+        }
+
+    @classmethod
+    def set_admin_msg_config(cls, send_delay=None, delete_after=None):
+        data = cls._load()
+        if send_delay is not None:
+            data['admin_msg_send_delay'] = int(send_delay)
+        if delete_after is not None:
+            data['admin_msg_delete_after'] = int(delete_after)
+        cls._save(data)
+
+    @classmethod
     def remove_admin_group(cls):
         data = cls._load()
         data.pop('admin_group_chat_id', None)

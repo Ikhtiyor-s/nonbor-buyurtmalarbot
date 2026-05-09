@@ -227,6 +227,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "settings_admin_group_menu":
         await show_admin_group_menu(query)
 
+    elif data == "admin_msg_edit_delay":
+        context.user_data.pop('waiting_health_field', None)
+        context.user_data.pop('waiting_stats_field', None)
+        context.user_data['waiting_admin_msg_field'] = 'send_delay'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_admin_group_menu")]]
+        await query.message.edit_text(
+            "⏱ <b>Xabar yuborish kechikishi (soniyada)</b>\n\n"
+            "Buyurtma kelgandan necha soniya o'tib admin guruhga yuborilsin?\n"
+            "<code>0</code> — darhol yuborish\n"
+            "Masalan: <code>30</code>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "admin_msg_edit_delete":
+        context.user_data.pop('waiting_health_field', None)
+        context.user_data.pop('waiting_stats_field', None)
+        context.user_data['waiting_admin_msg_field'] = 'delete_after'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_admin_group_menu")]]
+        await query.message.edit_text(
+            "🗑 <b>Xabarni avtomatik o'chirish (soniyada)</b>\n\n"
+            "Admin guruhga yuborilgan xabar necha soniyadan keyin o'chirilsin?\n"
+            "<code>0</code> — o'chirmaslik\n"
+            "Masalan: <code>300</code> (5 daqiqa)",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
     elif data == "settings_admin_group":
         await ask_admin_group(query, context)
 
@@ -2627,23 +2653,35 @@ async def show_admin_group_menu(query):
     from .models import AdminSettings
     admin_group_id = AdminSettings.get_admin_group_chat_id()
     admin_group_title = AdminSettings.get_admin_group_title()
+    msg_cfg = AdminSettings.get_admin_msg_config()
+    send_delay = msg_cfg['send_delay']
+    delete_after = msg_cfg['delete_after']
 
     if admin_group_id:
         info = f"✅ <b>Ulangan:</b> {admin_group_title or admin_group_id}\n🆔 <code>{admin_group_id}</code>"
         keyboard = [
             [InlineKeyboardButton("🔄 Guruhni almashtirish", callback_data="settings_admin_group")],
             [InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data="settings_remove_admin_group")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
         ]
     else:
         info = "❌ <b>Admin guruh ulanmagan</b>"
         keyboard = [
             [InlineKeyboardButton("➕ Guruh ulash", callback_data="settings_admin_group")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
         ]
+
+    send_label = f"⏱ Yuborish kechikishi: {send_delay} sek" if send_delay > 0 else "⏱ Yuborish kechikishi: yo'q"
+    del_label = f"🗑 Avtomatik o'chirish: {delete_after} sek" if delete_after > 0 else "🗑 Avtomatik o'chirish: o'chirilmaydi"
+
+    keyboard += [
+        [InlineKeyboardButton(send_label, callback_data="admin_msg_edit_delay")],
+        [InlineKeyboardButton(del_label, callback_data="admin_msg_edit_delete")],
+        [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
+    ]
 
     await query.message.edit_text(
         f"👥 <b>Admin guruh</b>\n\n{info}\n\n"
+        f"⏱ Xabar yuborish kechikishi: <b>{send_delay} sek</b>\n"
+        f"🗑 Avtomatik o'chirish: <b>{delete_after} sek{' (o\\'chirilmaydi)' if delete_after == 0 else ''}</b>\n\n"
         f"<i>Guruhda /get_chat_id buyrug'ini bering — avtomatik ulanadi.</i>",
         parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -2759,6 +2797,42 @@ async def show_health_config(query):
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+async def handle_admin_msg_input(update, context) -> bool:
+    """Admin guruh xabar sozlamalarini qabul qilish (soniya)"""
+    field = context.user_data.get('waiting_admin_msg_field')
+    if not field:
+        return False
+
+    text = (update.message.text or '').strip()
+    try:
+        val = int(text)
+        if val < 0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Manfiy bo'lmagan butun son kiriting (masalan: 0, 30, 300)")
+        return True
+
+    from .models import AdminSettings
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    if field == 'send_delay':
+        AdminSettings.set_admin_msg_config(send_delay=val)
+        label = "Yuborish kechikishi"
+    else:
+        AdminSettings.set_admin_msg_config(delete_after=val)
+        label = "Avtomatik o'chirish"
+
+    context.user_data.pop('waiting_admin_msg_field', None)
+    cfg = AdminSettings.get_admin_msg_config()
+    keyboard = [[InlineKeyboardButton("👥 Admin guruh sozlamalari", callback_data="settings_admin_group_menu")]]
+    await update.message.reply_text(
+        f"✅ {label}: <b>{val} sek</b> saqlandi.\n\n"
+        f"⏱ Yuborish kechikishi: {cfg['send_delay']} sek\n"
+        f"🗑 Avtomatik o'chirish: {cfg['delete_after']} sek",
+        parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return True
 
 
 async def handle_health_input(update, context) -> bool:

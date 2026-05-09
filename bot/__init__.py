@@ -267,6 +267,9 @@ def run_bot():
         # API health monitoring sozlamasi (oldin tekshirish)
         if await callback_handler.handle_health_input(update, context):
             return
+        # Admin guruh xabar sozlamasi
+        if await callback_handler.handle_admin_msg_input(update, context):
+            return
         # Admin text input (buyurtma qidirish, shablon yaratish/tahrirlash)
         if await handlers.handle_admin_text_input(update, context):
             return

@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import asyncio
 import aiohttp
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
@@ -354,13 +355,37 @@ class NotificationBot:
                 from .models import AdminSettings
                 admin_group_id = AdminSettings.get_admin_group_chat_id()
                 if admin_group_id and str(admin_group_id) != str(seller.group_chat_id):
+                    msg_cfg = AdminSettings.get_admin_msg_config()
+                    send_delay = msg_cfg['send_delay']
+                    delete_after = msg_cfg['delete_after']
+
                     admin_text = self._format_order_message(order_data, show_customer=True)
                     admin_text = f"📢 <b>[{seller.full_name}]</b>\n\n" + admin_text
-                    await self.bot.send_message(
-                        chat_id=int(admin_group_id),
-                        text=admin_text,
-                        parse_mode='HTML'
-                    )
+
+                    async def _send_admin_msg():
+                        if send_delay > 0:
+                            await asyncio.sleep(send_delay)
+                        try:
+                            msg = await self.bot.send_message(
+                                chat_id=int(admin_group_id),
+                                text=admin_text,
+                                parse_mode='HTML'
+                            )
+                            if delete_after > 0:
+                                async def _auto_delete():
+                                    await asyncio.sleep(delete_after)
+                                    try:
+                                        await self.bot.delete_message(
+                                            chat_id=int(admin_group_id),
+                                            message_id=msg.message_id
+                                        )
+                                    except Exception:
+                                        pass
+                                asyncio.create_task(_auto_delete())
+                        except Exception as e:
+                            logger.warning(f"Admin group send failed: {e}")
+
+                    asyncio.create_task(_send_admin_msg())
             except Exception as ae:
                 logger.warning(f"Admin group notification failed: {ae}")
 
