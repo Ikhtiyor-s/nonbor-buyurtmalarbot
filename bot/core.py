@@ -1300,14 +1300,100 @@ async def check_and_call_sellers():
 
 
 async def _send_stats_now():
-    """Admin so'rovi bilan darhol statistika yuborish (vaqt cheki yo'q)"""
-    from .models import AdminSettings
-    cfg = AdminSettings.get_stats_config()
-    await _build_and_send_stats(
-        period_start_str=cfg['period_start'],
-        period_end_str=cfg['period_end'],
-        label="JORIY STATISTIKA"
-    )
+    """Admin so'rovi bilan darhol statistika yuborish — so'nggi 24 soat"""
+    from .models import AdminSettings, Seller
+
+    now = datetime.now()
+    period_start_dt = now - timedelta(hours=24)
+
+    all_history = _load_order_history()
+    period_orders = []
+    for od in all_history:
+        notified_at = od.get('notified_at', '')
+        if not notified_at:
+            continue
+        try:
+            t = datetime.fromisoformat(notified_at[:19])
+            if period_start_dt <= t <= now:
+                period_orders.append(od)
+        except ValueError:
+            continue
+
+    call_log = _load_call_log()
+    period_calls = [
+        c for c in call_log
+        if period_start_dt.isoformat() <= c.get('called_at', '') <= now.isoformat()
+    ]
+
+    total = len(period_orders)
+    accepted  = sum(1 for o in period_orders if o.get('status') == 'accepted')
+    rejected  = sum(1 for o in period_orders if o.get('status') in ('rejected', 'cancelled'))
+    expired   = sum(1 for o in period_orders if o.get('status') == 'expired')
+    new_count = sum(1 for o in period_orders if o.get('status') == 'new')
+
+    seller_stats: dict = {}
+    for od in period_orders:
+        sid = od.get('seller_id', 'unknown')
+        if sid not in seller_stats:
+            name = od.get('seller_name', '')
+            if not name:
+                s = Seller.get(id=sid)
+                name = s.full_name if s else sid[:12]
+            seller_stats[sid] = {'name': name, 'total': 0, 'accepted': 0, 'rejected': 0, 'expired': 0, 'new': 0, 'calls': 0, 'calls_success': 0}
+        seller_stats[sid]['total'] += 1
+        st = od.get('status', 'new')
+        if st == 'accepted':
+            seller_stats[sid]['accepted'] += 1
+        elif st in ('rejected', 'cancelled'):
+            seller_stats[sid]['rejected'] += 1
+        elif st == 'expired':
+            seller_stats[sid]['expired'] += 1
+        else:
+            seller_stats[sid]['new'] += 1
+
+    for c in period_calls:
+        sid = c.get('seller_id', '')
+        if sid in seller_stats:
+            seller_stats[sid]['calls'] += 1
+            if c.get('success'):
+                seller_stats[sid]['calls_success'] += 1
+
+    date_label = f"{period_start_dt.strftime('%d.%m.%Y %H:%M')} — {now.strftime('%d.%m.%Y %H:%M')}"
+    lines = [
+        f"📊 <b>JORIY STATISTIKA (so'nggi 24 soat)</b>\n"
+        f"🕐 {date_label}\n\n"
+        f"📦 Jami: <b>{total} ta</b>\n"
+        f"✅ Qabul qilingan: <b>{accepted} ta</b>\n"
+        f"❌ Rad etilgan: <b>{rejected} ta</b>\n"
+        f"⏰ Muddati o'tgan: <b>{expired} ta</b>\n"
+        f"⏳ Kutilmoqda: <b>{new_count} ta</b>\n"
+    ]
+    if seller_stats:
+        lines.append("\n<b>━━━ RESTORANLAR ━━━</b>\n")
+        for i, (sid, s) in enumerate(seller_stats.items(), 1):
+            call_info = ''
+            if s['calls'] > 0:
+                result = "javob berdi ✅" if s['calls_success'] > 0 else "javob bermadi ❌"
+                call_info = f"   📞 {s['calls']} marta qo'ng'iroq — {result}\n"
+            lines.append(
+                f"{i}. <b>{s['name']}</b>\n"
+                f"   📦 {s['total']} ta | ✅{s['accepted']} ❌{s['rejected']} ⏰{s['expired']} ⏳{s['new']}\n"
+                f"{call_info}"
+            )
+
+    text = "".join(lines)
+    from .models import AdminSettings as AS
+    admin_group_id = AS.get_admin_group_chat_id()
+    admin_ids = [a.strip() for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()]
+    tg_bot = NotificationBot().bot
+
+    for chat_id in ([int(a) for a in admin_ids] + ([int(admin_group_id)] if admin_group_id else [])):
+        try:
+            await tg_bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
+        except TelegramError as e:
+            logger.error(f"Stats yuborishda xato: {e}")
+
+    logger.info(f"Joriy statistika yuborildi: {total} buyurtma (so'nggi 24 soat)")
 
 
 async def _build_and_send_stats(period_start_str: str, period_end_str: str, label: str = "KUNLIK STATISTIKA"):
