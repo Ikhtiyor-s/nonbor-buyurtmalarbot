@@ -60,13 +60,6 @@ async def check_missed_orders_job(context):
 
 
 
-async def call_sellers_job(context):
-    """Asterisk AMI orqali qabul qilinmagan buyurtmalar uchun qo'ng'iroq"""
-    from .core import check_and_call_sellers
-    try:
-        await check_and_call_sellers()
-    except Exception as e:
-        logger.error(f"Call sellers error: {e}")
 
 
 async def daily_stats_job(context):
@@ -330,14 +323,7 @@ def run_bot():
     )
     print("\nMissed orders alert faollashtirildi (har 5 sek tekshiriladi)")
 
-    # Asterisk AMI qo'ng'iroq (har 15 sekundda)
-    job_queue.run_repeating(
-        call_sellers_job,
-        interval=15,
-        first=20,
-        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 15}
-    )
-    print("\nAsterisk AMI autodialer faollashtirildi (har 15 sek)")
+    print("\nIP telefon: bot qo'ng'iroq qilmaydi — Asterisk o'zi boshqaradi")
 
     # Kunlik statistika (har daqiqa vaqtni tekshiradi)
     job_queue.run_repeating(

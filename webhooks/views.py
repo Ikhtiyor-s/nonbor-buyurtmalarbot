@@ -39,6 +39,66 @@ def run_async(coro):
 
 @csrf_exempt
 @require_POST
+def call_result_webhook(request):
+    """
+    Asterisk IP telefon qo'ng'iroq natijasini qabul qilish.
+
+    Asterisk shu endpoint ga POST yuboradi (AGI yoki AMI Event orqali):
+    {
+        "seller_id":   "...",        # ixtiyoriy
+        "seller_name": "Restoran",   # ixtiyoriy
+        "phone":       "+998...",    # qo'ng'iroq qilingan raqam
+        "duration":    45,           # sekund (ixtiyoriy)
+        "answered":    true          # javob berildimi
+    }
+    Secret header: X-Telegram-Bot-Secret
+    """
+    expected_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+    if request.headers.get('X-Telegram-Bot-Secret', '') != expected_secret:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    phone      = data.get('phone', '')
+    answered   = bool(data.get('answered', False))
+    seller_id  = data.get('seller_id', '')
+    seller_name = data.get('seller_name', '')
+    duration   = data.get('duration', 0)
+
+    if not phone:
+        return JsonResponse({'error': 'phone required'}, status=400)
+
+    from bot.core import log_ami_call
+    log_ami_call(
+        seller_id=seller_id,
+        seller_name=seller_name,
+        phone=phone,
+        success=answered,
+    )
+
+    # DIQQAT xabarini yangilash (agar alert chiqib turgan bo'lsa)
+    if seller_id:
+        try:
+            from bot.core import _load_alert_tracker, _save_alert_tracker
+            tracker = _load_alert_tracker()
+            entry = tracker.get(str(seller_id))
+            if entry:
+                call_count = entry.get('call_count', 0) + 1
+                entry['call_count'] = call_count
+                tracker[str(seller_id)] = entry
+                _save_alert_tracker(tracker)
+        except Exception as e:
+            logger.warning(f"call_result_webhook: tracker yangilashda xato: {e}")
+
+    logger.info(f"IP telefon qo'ng'iroq: {phone}, javob={'Ha' if answered else 'Yo\\'q'}, {duration}s")
+    return JsonResponse({'status': 'ok', 'logged': True})
+
+
+@csrf_exempt
+@require_POST
 def nonbor_webhook(request):
     """
     Nonbor API dan kelgan webhook — yangi buyurtma push notification.

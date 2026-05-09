@@ -8,6 +8,9 @@ urlpatterns = [
     # Nonbor API webhook — yangi buyurtma kelganda push qiladi
     path('nonbor/', views.nonbor_webhook, name='nonbor_webhook'),
 
+    # Asterisk IP telefon — qo'ng'iroq natijasini yuboradi
+    path('call-result/', views.call_result_webhook, name='call_result_webhook'),
+
     # API webhook - tashqi API dan buyurtmalar qabul qilish
     path('api/', views.api_webhook, name='api_webhook'),
 
