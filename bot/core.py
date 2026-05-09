@@ -1000,18 +1000,22 @@ def _format_missed_alert(seller, missed_orders, call_count=0):
 
         items_text = ""
         items_total = 0
-        for item in (o.items or []):
+        item_list = o.items or []
+        for idx, item in enumerate(item_list, 1):
             item_price = int(item.get('price', 0)) // 100
             qty = item.get('quantity', 1)
-            items_total += item_price * qty
-            items_text += (
-                f"   Mahsulot: {item.get('name', '?')}\n"
-                f"   Miqdor: {qty} ta\n"
-                f"   Narx: {item_price:,} so'm\n"
-            )
+            line_total = item_price * qty
+            items_total += line_total
+            if qty > 1:
+                items_text += f"   {idx}. {item.get('name', '?')} x{qty} = {line_total:,} so'm\n"
+            else:
+                items_text += f"   {idx}. {item.get('name', '?')} — {item_price:,} so'm\n"
         order_total = int(o.total_amount) // 100
         delivery_fee = order_total - items_total
-        delivery_fee_line = f"   🚴 Yetkazib berish: {delivery_fee:,} so'm\n" if delivery_fee > 0 else ""
+        if delivery_fee > 0:
+            delivery_fee_line = f"   🚴 Yetkazib berish: {delivery_fee:,} so'm\n"
+        else:
+            delivery_fee_line = "   🚴 Yetkazib berish: 0 so'm\n"
 
         extra = ''
         if dm and dm in DELIVERY_LABELS:
