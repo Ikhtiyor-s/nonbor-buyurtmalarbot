@@ -2678,11 +2678,12 @@ async def show_admin_group_menu(query):
         [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
     ]
 
+    del_note = " (o'chirilmaydi)" if delete_after == 0 else ""
     await query.message.edit_text(
         f"👥 <b>Admin guruh</b>\n\n{info}\n\n"
         f"⏱ Xabar yuborish kechikishi: <b>{send_delay} sek</b>\n"
-        f"🗑 Avtomatik o'chirish: <b>{delete_after} sek{' (o\\'chirilmaydi)' if delete_after == 0 else ''}</b>\n\n"
-        f"<i>Guruhda /get_chat_id buyrug'ini bering — avtomatik ulanadi.</i>",
+        f"🗑 Avtomatik o'chirish: <b>{delete_after} sek{del_note}</b>\n\n"
+        "<i>Guruhda /get_chat_id buyrug'ini bering — avtomatik ulanadi.</i>",
         parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
