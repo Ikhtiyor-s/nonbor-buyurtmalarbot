@@ -93,7 +93,8 @@ def call_result_webhook(request):
         except Exception as e:
             logger.warning(f"call_result_webhook: tracker yangilashda xato: {e}")
 
-    logger.info(f"IP telefon qo'ng'iroq: {phone}, javob={'Ha' if answered else 'Yo\\'q'}, {duration}s")
+    answer_str = "Ha" if answered else "Yo'q"
+    logger.info(f"IP telefon qo'ng'iroq: {phone}, javob={answer_str}, {duration}s")
     return JsonResponse({'status': 'ok', 'logged': True})
 
 
