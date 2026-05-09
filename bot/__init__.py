@@ -336,14 +336,13 @@ def run_bot():
 
     # API health monitoring
     from .models import AdminSettings as _AS
-    health_interval = _AS.get_health_config().get('interval', 10) * 60
     job_queue.run_repeating(
         api_health_job,
-        interval=health_interval,
-        first=60,
+        interval=60,
+        first=30,
         job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
     )
-    print(f"\nAPI health monitoring faollashtirildi (har {health_interval // 60} daqiqa)")
+    print("\nAPI health monitoring faollashtirildi (har 1 daqiqa)")
 
     # Bizneslarni APIdan sync qilish (startup + har 5 daqiqada)
     job_queue.run_repeating(
