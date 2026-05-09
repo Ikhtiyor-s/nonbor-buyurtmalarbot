@@ -1611,3 +1611,27 @@ async def check_api_health():
     await _delete_health_alerts()
     await _send_to_all(text, save=True)
     logger.warning(f"API down: {url} — {duration}")
+
+    # Autodialer webhook — darhol signal yuborish (agar sozlangan bo'lsa)
+    notify_url = os.getenv('AUTODIALER_NOTIFY_URL', '')
+    if notify_url:
+        try:
+            payload = json.dumps({
+                'event': 'api_down',
+                'reason': f"Nonbor API {duration} ishlamayapti",
+                'down_since': down_since,
+                'admin_phone': cfg.get('phone', ''),
+            }).encode()
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(
+                    notify_url,
+                    data=payload,
+                    headers={
+                        'Content-Type': 'application/json',
+                        'X-Telegram-Bot-Secret': os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key'),
+                    }
+                ) as resp:
+                    logger.info(f"Autodialer notify: {resp.status}")
+        except Exception as e:
+            logger.warning(f"Autodialer notify xato: {e}")
