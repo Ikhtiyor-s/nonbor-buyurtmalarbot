@@ -1699,3 +1699,92 @@ async def check_api_health():
 
     if is_first_down or call_delay == 0:
         asyncio.create_task(_notify_autodialer())
+
+
+async def fetch_dashboard_orders(from_dt: str = None, to_dt: str = None) -> dict:
+    """
+    Nonbor dashboard API dan real buyurtmalarni olish.
+    JWT token bo'lsa → /dashboard/orders/ (barcha statuslar)
+    Yo'q bo'lsa → bo'sh dict qaytaradi
+    """
+    jwt_token = os.getenv('DASHBOARD_JWT_TOKEN', '').strip()
+    api_url = os.getenv('DASHBOARD_API_URL', 'https://prod.nonbor.uz/api/v2/dashboard/orders/')
+
+    if not jwt_token:
+        return {}
+
+    params = {}
+    if from_dt:
+        params['from_datetime'] = from_dt
+    if to_dt:
+        params['to_datetime'] = to_dt
+
+    try:
+        headers = {
+            'Authorization': f'Bearer {jwt_token}',
+            'Accept': 'application/json',
+        }
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(api_url, headers=headers, params=params) as resp:
+                if resp.status == 401:
+                    logger.warning("Dashboard JWT token muddati o'tgan yoki noto'g'ri")
+                    return {}
+                if resp.status != 200:
+                    logger.error(f"Dashboard API error: {resp.status}")
+                    return {}
+                data = await resp.json()
+                return data
+    except Exception as e:
+        logger.exception(f"fetch_dashboard_orders xato: {e}")
+        return {}
+
+
+async def sync_dashboard_orders_to_history():
+    """
+    Dashboard API dan so'nggi buyurtmalarni order_history.json ga yozish.
+    Har 10 daqiqada chaqiriladi.
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    from_dt = (now - timedelta(hours=24)).isoformat()
+
+    data = await fetch_dashboard_orders(from_dt=from_dt)
+    if not data or 'data' not in data:
+        return
+
+    orders_by_state = data.get('data', {})
+    count = 0
+
+    STATUS_MAP = {
+        'PENDING': 'new', 'CHECKING': 'new', 'NEW': 'new',
+        'ACCEPTED': 'accepted', 'PREPARING': 'accepted', 'READY': 'accepted',
+        'ON_DELIVERY': 'delivering', 'DELIVERING': 'delivering',
+        'DELIVERED': 'completed', 'COMPLETED': 'completed', 'FINISHED': 'done',
+        'CANCELLED_CLIENT': 'rejected', 'CANCELLED_SELLER': 'rejected',
+        'EXPIRED': 'expired', 'PAYMENT_EXPIRED': 'expired',
+    }
+
+    for state, orders in orders_by_state.items():
+        if not isinstance(orders, list):
+            continue
+        status = STATUS_MAP.get(state.upper(), 'new')
+        for order in orders:
+            order_id = order.get('id')
+            if not order_id:
+                continue
+            biz = order.get('business_name', '') or order.get('business', {}).get('title', '')
+            _archive_order(
+                order_id=str(order_id),
+                seller_id=f"biz_{biz}",
+                seller_name=biz,
+                status=status,
+                total=int(float(order.get('total_price', 0) or 0) * 100),
+                items=[],
+                notified_at=order.get('created_at', now.isoformat()),
+            )
+            count += 1
+
+    if count:
+        logger.info(f"Dashboard sync: {count} ta buyurtma arxivlandi")
