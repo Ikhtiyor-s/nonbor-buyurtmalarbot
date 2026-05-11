@@ -71,18 +71,6 @@ async def daily_stats_job(context):
         logger.error(f"Daily stats error: {e}")
 
 
-async def dashboard_sync_job(context):
-    """Dashboard API dan real buyurtmalarni sinxronlash"""
-    import os
-    if not os.getenv('DASHBOARD_JWT_TOKEN', '').strip():
-        return
-    from .core import sync_dashboard_orders_to_history
-    try:
-        await sync_dashboard_orders_to_history()
-    except Exception as e:
-        logger.error(f"Dashboard sync error: {e}")
-
-
 async def api_health_job(context):
     """API health monitoring"""
     from .core import check_api_health
@@ -348,15 +336,6 @@ def run_bot():
         job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 30}
     )
     print("\nKunlik statistika faollashtirildi (har daqiqa tekshiriladi)")
-
-    # Dashboard API sinxronizatsiya (har 10 daqiqada)
-    job_queue.run_repeating(
-        dashboard_sync_job,
-        interval=600,
-        first=30,
-        job_kwargs={'coalesce': True, 'max_instances': 1, 'misfire_grace_time': 60}
-    )
-    print("\nDashboard API sinxronizatsiya (har 10 daqiqada, JWT bo'lsa)")
 
     # API health monitoring
     from .models import AdminSettings as _AS
