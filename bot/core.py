@@ -187,7 +187,8 @@ _api_health = {
     'is_down': False,
     'down_since': None,
     'last_ok': None,
-    'alert_messages': [],   # yuborilgan down xabarlar (o'chirish uchun)
+    'last_checked': None,   # oxirgi tekshiruv vaqti (interval uchun)
+    'alert_messages': [],
 }
 
 
@@ -1527,7 +1528,7 @@ async def generate_and_send_daily_stats():
 
 
 async def check_api_health():
-    """API health monitoring — har daqiqa. Tarix yozadi, down/up xabar yuboradi."""
+    """API health monitoring — sozlangan intervallda tekshiradi."""
     global _api_health
     from .models import AdminSettings
 
@@ -1537,6 +1538,19 @@ async def check_api_health():
         return
 
     now = datetime.now()
+    interval_minutes = cfg.get('interval', 10)
+
+    # Oxirgi tekshiruvdan beri yetarli vaqt o'tdimi?
+    last_checked = _api_health.get('last_checked')
+    if last_checked and not _api_health.get('is_down'):
+        try:
+            elapsed = (now - datetime.fromisoformat(last_checked)).total_seconds()
+            if elapsed < interval_minutes * 60:
+                return
+        except Exception:
+            pass
+
+    _api_health['last_checked'] = now.isoformat()
     api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
 
     success = False
