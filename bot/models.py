@@ -537,18 +537,21 @@ class AdminSettings:
     @classmethod
     def get_health_config(cls) -> dict:
         return {
-            'phone':    cls.get('health_phone', ''),
-            'interval': int(cls.get('health_interval', 10)),
-            'url':      cls.get('health_url', '') or os.getenv('EXTERNAL_API_URL', ''),
+            'phone':      cls.get('health_phone', ''),
+            'interval':   int(cls.get('health_interval', 10)),
+            'url':        cls.get('health_url', '') or os.getenv('EXTERNAL_API_URL', ''),
+            'call_delay': int(cls.get('health_call_delay', 0)),  # ishlamayotganini aniqlashdan so'ng necha soniyada qo'ng'iroq
         }
 
     @classmethod
-    def set_health_config(cls, phone=None, interval=None, url=None):
+    def set_health_config(cls, phone=None, interval=None, url=None, call_delay=None):
         data = cls._load()
         if phone is not None:
             data['health_phone'] = phone
         if interval is not None:
             data['health_interval'] = int(interval)
+        if call_delay is not None:
+            data['health_call_delay'] = int(call_delay)
         if url is not None:
             data['health_url'] = url
         cls._save(data)

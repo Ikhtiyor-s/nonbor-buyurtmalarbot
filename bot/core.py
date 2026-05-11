@@ -12,6 +12,7 @@ SUMMARY_MSG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'summar
 CALL_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'call_log.json')
 ORDER_HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'order_history.json')
 SENT_ORDERS_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'sent_orders.json')
+HEALTH_LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'health_log.json')
 MISSED_ORDER_MINUTES = int(os.getenv('MISSED_ORDER_MINUTES', 3))
 WAIT_BEFORE_CALL = int(os.getenv('WAIT_BEFORE_CALL', 90))
 MAX_CALL_ATTEMPTS = int(os.getenv('MAX_CALL_ATTEMPTS', 2))
@@ -270,6 +271,36 @@ logger = logging.getLogger(__name__)
 
 # Buyurtma muddati (daqiqada) - shu vaqtdan keyin o'chiriladi
 ORDER_EXPIRY_MINUTES = int(os.getenv('ORDER_EXPIRY_MINUTES', 30))
+
+def _append_health_log(event: str, **kwargs):
+    """Health tarixga yozish: 'down' yoki 'up'"""
+    try:
+        if os.path.exists(HEALTH_LOG_FILE):
+            with open(HEALTH_LOG_FILE, 'r', encoding='utf-8') as f:
+                log = json.load(f)
+        else:
+            log = []
+        entry = {'event': event, 'timestamp': datetime.now().isoformat(), **kwargs}
+        log.append(entry)
+        # 30 kundan eski yozuvlarni tozalash
+        cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+        log = [e for e in log if e.get('timestamp', '') >= cutoff]
+        os.makedirs(os.path.dirname(HEALTH_LOG_FILE), exist_ok=True)
+        with open(HEALTH_LOG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(log, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"health_log yozishda xato: {e}")
+
+
+def _load_health_log() -> list:
+    if os.path.exists(HEALTH_LOG_FILE):
+        try:
+            with open(HEALTH_LOG_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
 
 def _load_sent_orders() -> set:
     """Restart dan keyin ham sent_orders saqlanib qolsin"""
@@ -1496,11 +1527,7 @@ async def generate_and_send_daily_stats():
 
 
 async def check_api_health():
-    """
-    API health monitoring — har daqiqa tekshiriladi.
-    Ishlamasa: admin + guruhga xabar. Har daqiqa eski xabar o'chirib yangi yuboradi.
-    Ishlasa: down xabarlar o'chiriladi, recovery xabari keladi.
-    """
+    """API health monitoring — har daqiqa. Tarix yozadi, down/up xabar yuboradi."""
     global _api_health
     from .models import AdminSettings
 
@@ -1511,13 +1538,12 @@ async def check_api_health():
 
     now = datetime.now()
     api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
-    headers = {"X-Telegram-Bot-Secret": api_secret}
 
     success = False
     try:
         timeout = aiohttp.ClientTimeout(total=15)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(url, headers={"X-Telegram-Bot-Secret": api_secret}) as resp:
                 success = resp.status < 500
     except Exception:
         success = False
@@ -1525,73 +1551,89 @@ async def check_api_health():
     tg_bot = NotificationBot().bot
     admin_ids = [a.strip() for a in os.getenv('ADMIN_IDS', '').split(',') if a.strip()]
     admin_group_id = AdminSettings.get_admin_group_chat_id()
+    all_chats = [int(a) for a in admin_ids] + ([int(admin_group_id)] if admin_group_id else [])
 
-    async def _delete_health_alerts():
-        """Barcha yuborilgan down xabarlarini o'chirish"""
-        for item in _api_health.get('alert_messages', []):
+    async def _delete_msgs(msgs: list):
+        for item in msgs:
             try:
-                await tg_bot.delete_message(
-                    chat_id=item['chat_id'],
-                    message_id=item['message_id']
-                )
+                await tg_bot.delete_message(chat_id=item['chat_id'], message_id=item['message_id'])
             except TelegramError:
                 pass
-        _api_health['alert_messages'] = []
 
-    async def _send_to_all(text: str, save=False):
-        """Admin va guruhga xabar yuborish, ixtiyoriy message_id saqlanadi"""
-        messages = []
-        for chat_id in ([int(a) for a in admin_ids] +
-                        ([int(admin_group_id)] if admin_group_id else [])):
+    async def _send_all(text: str, save_key: str = None) -> list:
+        sent = []
+        for chat_id in all_chats:
             try:
                 msg = await tg_bot.send_message(chat_id=chat_id, text=text, parse_mode='HTML')
-                if save:
-                    messages.append({'chat_id': chat_id, 'message_id': msg.message_id})
+                sent.append({'chat_id': chat_id, 'message_id': msg.message_id})
             except TelegramError as e:
-                logger.error(f"Health xabar yuborishda xato ({chat_id}): {e}")
-        if save:
-            _api_health['alert_messages'] = messages
+                logger.error(f"Health xabar ({chat_id}): {e}")
+        if save_key:
+            _api_health[save_key] = sent
+        return sent
+
+    async def _auto_delete_after(msgs: list, delay_secs: int):
+        """delay_secs soniyadan keyin xabarlarni o'chirish"""
+        await asyncio.sleep(delay_secs)
+        await _delete_msgs(msgs)
 
     if success:
         _api_health['last_ok'] = now.isoformat()
         if _api_health.get('is_down'):
-            # Tiklandi
             down_since = _api_health.get('down_since', now.isoformat())
             try:
-                mins = int((now - datetime.fromisoformat(down_since)).total_seconds() / 60)
-                duration = f"{mins} daqiqa" if mins > 0 else "bir necha soniya"
+                secs = int((now - datetime.fromisoformat(down_since)).total_seconds())
+                mins = secs // 60
+                duration = f"{mins} daqiqa {secs % 60} sek" if mins > 0 else f"{secs} soniya"
             except Exception:
                 duration = "noma'lum"
+                secs = 0
 
-            await _delete_health_alerts()
+            # Down xabarlarni o'chirish
+            await _delete_msgs(_api_health.get('alert_messages', []))
+            _api_health['alert_messages'] = []
+
+            # Tiklandi xabari yuborish
             text = (
                 f"✅ <b>API tiklandi!</b>\n\n"
                 f"⏱ Ishlamagan vaqt: <b>{duration}</b>\n"
                 f"🕐 {now.strftime('%H:%M:%S')}"
             )
-            await _send_to_all(text)
-            logger.info(f"API tiklandi: {url} ({duration})")
+            sent = await _send_all(text)
+
+            # Tiklandi xabarini 120 soniyadan keyin o'chirish
+            if sent:
+                asyncio.create_task(_auto_delete_after(sent, 120))
+
+            # Tarixga yozish
+            _append_health_log('up', duration_seconds=secs, down_since=down_since)
+            logger.info(f"API tiklandi ({duration})")
 
         _api_health['is_down'] = False
         _api_health['down_since'] = None
         _api_health['admin_call_acked'] = False
         return
 
-    # API ishlamayapti
-    if not _api_health.get('is_down'):
+    # === API ISHLAMAYAPTI ===
+    is_first_down = not _api_health.get('is_down')
+    if is_first_down:
         _api_health['is_down'] = True
         _api_health['down_since'] = now.isoformat()
         _api_health['alert_messages'] = []
+        _append_health_log('down', url=url)
 
     down_since = _api_health.get('down_since', now.isoformat())
     last_ok = _api_health.get('last_ok', '')
+
     try:
-        mins = int((now - datetime.fromisoformat(down_since)).total_seconds() / 60)
+        secs = int((now - datetime.fromisoformat(down_since)).total_seconds())
+        mins = secs // 60
         since_str = datetime.fromisoformat(down_since).strftime('%H:%M:%S')
         duration = f"{mins} daqiqa" if mins > 0 else "hozirgina"
     except Exception:
         since_str = '—'
         duration = 'noma\'lum'
+        secs = 0
 
     last_ok_str = ''
     if last_ok:
@@ -1607,31 +1649,39 @@ async def check_api_health():
         f"🔗 <code>{url[:60]}</code>"
     )
 
-    # Eski xabarni o'chirib, yangi xabar yuborish
-    await _delete_health_alerts()
-    await _send_to_all(text, save=True)
+    # Eski down xabarini o'chirib yangi yuborish
+    await _delete_msgs(_api_health.get('alert_messages', []))
+    await _send_all(text, save_key='alert_messages')
     logger.warning(f"API down: {url} — {duration}")
 
-    # Autodialer webhook — darhol signal yuborish (agar sozlangan bo'lsa)
+    # Autodialer webhook — call_delay soniyadan keyin
+    call_delay = cfg.get('call_delay', 0)
     notify_url = os.getenv('AUTODIALER_NOTIFY_URL', '')
-    if notify_url:
-        try:
-            payload = json.dumps({
-                'event': 'api_down',
-                'reason': f"Nonbor API {duration} ishlamayapti",
-                'down_since': down_since,
-                'admin_phone': cfg.get('phone', ''),
-            }).encode()
-            timeout = aiohttp.ClientTimeout(total=5)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    notify_url,
-                    data=payload,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'X-Telegram-Bot-Secret': os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key'),
-                    }
-                ) as resp:
-                    logger.info(f"Autodialer notify: {resp.status}")
-        except Exception as e:
-            logger.warning(f"Autodialer notify xato: {e}")
+
+    async def _notify_autodialer():
+        if call_delay > 0:
+            await asyncio.sleep(call_delay)
+            # Qayta tekshirish — tiklangan bo'lsa yubormaslik
+            if not _api_health.get('is_down'):
+                return
+        if notify_url:
+            try:
+                payload = json.dumps({
+                    'event': 'api_down',
+                    'reason': f"Nonbor API {duration} ishlamayapti",
+                    'down_since': down_since,
+                    'admin_phone': cfg.get('phone', ''),
+                    'sound': 'api_down',
+                }).encode()
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                    async with session.post(
+                        notify_url, data=payload,
+                        headers={'Content-Type': 'application/json',
+                                 'X-Telegram-Bot-Secret': api_secret}
+                    ) as resp:
+                        logger.info(f"Autodialer notify: {resp.status}")
+            except Exception as e:
+                logger.warning(f"Autodialer notify xato: {e}")
+
+    if is_first_down or call_delay == 0:
+        asyncio.create_task(_notify_autodialer())

@@ -341,6 +341,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    elif data == "health_edit_call_delay":
+        context.user_data.pop('waiting_stats_field', None)
+        context.user_data['waiting_health_field'] = 'call_delay'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data="settings_health_config")]]
+        await query.message.edit_text(
+            "📞 <b>Qo'ng'iroq kechikishi (soniyada)</b>\n\n"
+            "API ishlamayotgani aniqlanganidan necha soniya o'tib qo'ng'iroq qilinsin?\n"
+            "<code>0</code> — darhol\n"
+            "Masalan: <code>120</code> (2 daqiqa)",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "health_history":
+        await show_health_history(query)
+
     elif data == "health_check_now":
         await query.answer("Tekshirilmoqda...", show_alert=False)
         from .core import check_api_health
@@ -2759,6 +2774,39 @@ async def handle_admin_phone_input(update, context) -> bool:
     return True
 
 
+async def show_health_history(query):
+    """API health tarixini ko'rsatish"""
+    from bot.core import _load_health_log
+
+    log = _load_health_log()
+    if not log:
+        keyboard = [[InlineKeyboardButton("◀️ Ortga", callback_data="settings_health_config")]]
+        await query.message.edit_text(
+            "📊 <b>API Health Tarixi</b>\n\n<i>Hali ma'lumot yo'q.</i>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    lines = ["📊 <b>API Health Tarixi</b>\n\n"]
+    # Oxirgi 20 ta yozuv, yangilardan eskiga
+    for entry in reversed(log[-20:]):
+        event = entry.get('event', '')
+        ts = entry.get('timestamp', '')[:16].replace('T', ' ')
+        if event == 'down':
+            lines.append(f"🔴 {ts} — <b>Ishlamay qoldi</b>\n")
+        elif event == 'up':
+            secs = entry.get('duration_seconds', 0)
+            mins = secs // 60
+            dur = f"{mins} daqiqa" if mins > 0 else f"{secs} soniya"
+            lines.append(f"✅ {ts} — <b>Tiklandi</b> ({dur})\n")
+
+    keyboard = [[InlineKeyboardButton("◀️ Ortga", callback_data="settings_health_config")]]
+    await query.message.edit_text(
+        "".join(lines),
+        parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 async def show_health_config(query):
     """API health monitoring sozlamalari"""
     from .models import AdminSettings
@@ -2770,33 +2818,38 @@ async def show_health_config(query):
     last_ok = state.get('last_ok', '—')
     if last_ok and last_ok != '—':
         try:
-            from datetime import datetime
             last_ok = datetime.fromisoformat(last_ok).strftime('%d.%m.%Y %H:%M:%S')
         except Exception:
             pass
 
+    call_delay = cfg.get('call_delay', 0)
+    call_delay_label = f"📞 Qo'ng'iroq kechikishi: {call_delay} sek" if call_delay else "📞 Qo'ng'iroq: darhol"
+
     phone_display = cfg['phone'] or '❌ kiritilmagan'
-    phone_row = [InlineKeyboardButton(f"📞 Raqam: {phone_display}", callback_data="health_edit_phone")]
+    phone_row = [InlineKeyboardButton(f"📱 Raqam: {phone_display}", callback_data="health_edit_phone")]
     if cfg['phone']:
-        phone_row.append(InlineKeyboardButton("🗑 O'chirish", callback_data="health_clear_phone"))
+        phone_row.append(InlineKeyboardButton("🗑", callback_data="health_clear_phone"))
+
     keyboard = [
         phone_row,
         [
             InlineKeyboardButton(f"⏱ Interval: {cfg['interval']} daqiqa", callback_data="health_edit_interval"),
+            InlineKeyboardButton(call_delay_label, callback_data="health_edit_call_delay"),
         ],
         [
+            InlineKeyboardButton("📊 Tarix", callback_data="health_history"),
             InlineKeyboardButton("🔍 Hozir tekshirish", callback_data="health_check_now"),
-            InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings"),
         ],
+        [InlineKeyboardButton("◀️ Ortga", callback_data="admin_settings")],
     ]
     await query.message.edit_text(
         f"🌐 <b>API Health Monitoring</b>\n\n"
         f"Holat: {status}\n"
         f"Oxirgi muvaffaqiyatli: {last_ok}\n\n"
-        f"📞 Ogohlantirish raqami: <b>{phone_display}</b>\n"
-        f"⏱ Tekshirish oralig'i: <b>{cfg['interval']} daqiqa</b>\n"
-        f"🔗 URL: <code>{cfg['url'][:50]}...</code>\n\n"
-        f"<i>API javob bermasa Telegram xabar + AMI qo'ng'iroq.</i>",
+        f"📱 Raqam: <b>{phone_display}</b>\n"
+        f"⏱ Tekshirish: <b>har 1 daqiqa</b>\n"
+        f"📞 Qo'ng'iroq kechikishi: <b>{call_delay} sek</b>\n"
+        f"🔗 URL: <code>{cfg['url'][:50]}...</code>",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -2867,6 +2920,17 @@ async def handle_health_input(update, context) -> bool:
         AdminSettings.set_health_config(interval=mins)
         context.user_data.pop('waiting_health_field', None)
 
+    elif field == 'call_delay':
+        try:
+            secs = int(text)
+            if secs < 0 or secs > 3600:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("❌ 0 dan 3600 gacha son kiriting (soniyada).")
+            return True
+        AdminSettings.set_health_config(call_delay=secs)
+        context.user_data.pop('waiting_health_field', None)
+
     else:
         return True
 
@@ -2874,8 +2938,8 @@ async def handle_health_input(update, context) -> bool:
     keyboard = [[InlineKeyboardButton("🌐 API monitoring sozlamalari", callback_data="settings_health_config")]]
     await update.message.reply_text(
         f"✅ Saqlandi!\n\n"
-        f"📞 Raqam: <b>{cfg['phone'] or '—'}</b>\n"
-        f"⏱ Interval: <b>{cfg['interval']} daqiqa</b>",
+        f"📱 Raqam: <b>{cfg['phone'] or '—'}</b>\n"
+        f"📞 Qo'ng'iroq kechikishi: <b>{cfg['call_delay']} sek</b>",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
