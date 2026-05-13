@@ -30,7 +30,7 @@ async def is_admin(user_id: int) -> bool:
     if str(user_id) in extra_ids:
         return True
 
-    # 3. Telefon raqam bo'yicha (env + settings)
+    # 3. Telefon raqam bo'yicha (env + settings) — har safar qayta tekshirish
     allowed_phones = [p.strip() for p in os.getenv('ALLOWED_PHONES', '').split(',') if p.strip()]
     admin_phones = AdminSettings.get_admin_phones()
     all_phones = set(allowed_phones) | set(admin_phones)
@@ -38,9 +38,16 @@ async def is_admin(user_id: int) -> bool:
     if all_phones:
         phone_registry = PhoneRegistry.get_by_telegram_id(str(user_id))
         if phone_registry and phone_registry.phone in all_phones:
-            # Telegram ID sini ham saqlash (keyingi tekshiruvlar tezroq bo'lsin)
             AdminSettings.add_extra_admin_id(str(user_id))
             return True
+        # Telefon ro'yxatda emas — extra_admin_ids dan ham olib tashlash
+        if str(user_id) in extra_ids:
+            phone_registry = phone_registry or PhoneRegistry.get_by_telegram_id(str(user_id))
+            if phone_registry and phone_registry.phone not in all_phones:
+                AdminSettings.remove_extra_admin_id(str(user_id))
+            elif not phone_registry:
+                # Telefon topilmasa ham — extra_admin_ids dan tozalash
+                AdminSettings.remove_extra_admin_id(str(user_id))
 
     return False
 
@@ -100,40 +107,91 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"is_admin_user: {is_admin_user}")
 
     if is_admin_user:
-        # Admin panel - eski dizayn (statistika + tugmalar)
-        from .models import Order
-        all_orders = Order.load_all()
+        # Admin panel - statistika + tugmalar
+        from bot.core import _load_call_log, fetch_order_stats_12h, fetch_call_stats_from_ip_phone
         now = datetime.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = now - timedelta(hours=12)
 
-        daily_orders = []
-        for o in all_orders:
-            created = o.get('created_at', '')
-            if created:
-                try:
-                    od = datetime.fromisoformat(created.replace('Z', '+00:00'))
-                    if od.replace(tzinfo=None) >= today_start:
-                        daily_orders.append(o)
-                except:
-                    pass
+        # Nonbor API dan oxirgi 12 soat statistikasi (JWT bo'lsa)
+        api_stats = await fetch_order_stats_12h()
 
-        total = len(daily_orders)
-        st = lambda s: len([o for o in daily_orders if o.get('status') == s])
-        accepted    = st('accepted')
-        rejected    = st('rejected') + st('cancelled')
-        expired     = st('expired')
-        new_orders  = st('new')
-        delivering  = st('delivering') + st('on_delivery')
-        delivered   = st('completed') + st('finished') + st('done')
-        calls_count = len([o for o in daily_orders if o.get('customer_phone')])
+        if api_stats is not None:
+            # API dan kelgan haqiqiy ma'lumotlar
+            # State nomlari: SAVATDA, WAITING_PAYMENT, CHECKING, NEW, ACCEPTED,
+            #                PREPARING, READY, ON_DELIVERY, COMPLETED,
+            #                CANCELLED_CLIENT, CANCELLED_SELLER, ACCEPT_EXPIRED, PAYMENT_EXPIRED
+            def sg(*keys):
+                return sum(api_stats.get(k, 0) for k in keys)
 
-        # AMI qo'ng'iroq statistikasi (bugun)
-        from bot.core import _load_call_log
-        call_log = _load_call_log()
-        today_calls = [c for c in call_log if c.get('called_at', '')[:10] == now.strftime('%Y-%m-%d')]
-        calls_total = len(today_calls)
-        calls_answered = len([c for c in today_calls if c.get('success')])
-        calls_missed = calls_total - calls_answered
+            new_orders  = sg('SAVATDA', 'WAITING_PAYMENT', 'CHECKING', 'NEW', 'PENDING')
+            accepted    = sg('ACCEPTED', 'PREPARING')
+            delivering  = sg('READY', 'ON_DELIVERY')
+            delivered   = sg('COMPLETED', 'FINISHED', 'DELIVERED')
+            rejected    = sg('CANCELLED_CLIENT', 'CANCELLED_SELLER')
+            expired     = sg('ACCEPT_EXPIRED', 'PAYMENT_EXPIRED', 'EXPIRED')
+            total       = sum(api_stats.values())
+            data_source = '🌐 Nonbor API'
+        else:
+            # Fallback: local fayldan
+            from .models import Order
+            all_orders = Order.load_all()
+            daily_orders = []
+            for o in all_orders:
+                created = o.get('created_at', '')
+                if created:
+                    try:
+                        od = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                        if od.replace(tzinfo=None) >= today_start:
+                            daily_orders.append(o)
+                    except:
+                        pass
+            total = len(daily_orders)
+            st = lambda s: len([o for o in daily_orders if o.get('status') == s])
+            accepted   = st('accepted')
+            rejected   = st('rejected') + st('cancelled')
+            expired    = st('expired')
+            new_orders = st('new')
+            delivering = st('delivering') + st('on_delivery')
+            delivered  = st('completed') + st('finished') + st('done')
+            data_source = '💾 Lokal fayl'
+
+        # Qo'ng'iroq statistikasi — IP telefondan (Autodialer API)
+        ip_call_stats = await fetch_call_stats_from_ip_phone()
+
+        if ip_call_stats is not None:
+            calls_total    = ip_call_stats.get('total_calls', 0)
+            calls_answered = ip_call_stats.get('answered_calls', 0)
+            calls_missed   = ip_call_stats.get('unanswered_calls', 0)
+            one_attempt    = ip_call_stats.get('calls_1_attempt', 0)
+            two_plus_attempts = ip_call_stats.get('calls_2_attempts', 0) + ip_call_stats.get('calls_3_attempts', 0)
+            unanswered     = calls_missed
+        else:
+            # Fallback: local call_log.json
+            call_log = _load_call_log()
+            today_calls = []
+            for c in call_log:
+                called_at = c.get('called_at', '')
+                if called_at:
+                    try:
+                        cd = datetime.fromisoformat(called_at.replace('Z', '+00:00'))
+                        if cd.replace(tzinfo=None) >= today_start:
+                            today_calls.append(c)
+                    except:
+                        pass
+            calls_total    = len(today_calls)
+            calls_answered = len([c for c in today_calls if c.get('success')])
+            calls_missed   = calls_total - calls_answered
+            seller_calls = {}
+            for c in today_calls:
+                sid = c.get('seller_id') or c.get('phone', '')
+                if sid not in seller_calls:
+                    seller_calls[sid] = {'attempts': 0, 'answered': False}
+                seller_calls[sid]['attempts'] += 1
+                if c.get('success'):
+                    seller_calls[sid]['answered'] = True
+            one_attempt       = sum(1 for s in seller_calls.values() if s['attempts'] == 1)
+            two_plus_attempts = sum(1 for s in seller_calls.values() if s['attempts'] >= 2)
+            unanswered        = sum(1 for s in seller_calls.values() if not s['answered'])
 
         from .callback_handler import get_admin_menu_keyboard
         reply_markup = get_admin_menu_keyboard(
@@ -142,19 +200,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         message = (
-            f"🏳 <b>BUGUNGI HISOBOT</b>\n"
+            f"🕐 <b>OXIRGI 12 SOAT HISOBOTI</b>\n"
             f"━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📦 <b>BUYURTMALAR:</b> {total} ta\n"
+            f"├ ⏳ Kutilmoqda: {new_orders}\n"
             f"├ ✅ Qabul qilindi: {accepted}\n"
             f"├ 🚴 Yetkazilmoqda: {delivering}\n"
             f"├ 🏁 Yetkazildi: {delivered}\n"
             f"├ ❌ Rad etildi: {rejected}\n"
-            f"├ ⏰ Muddati o'tgan: {expired}\n"
-            f"└ ⏳ Kutilmoqda: {new_orders}\n\n"
-            f"📞 <b>QO'NG'IROQLAR:</b> {calls_total} ta\n"
-            f"├ ✅ Javob berdi: {calls_answered}\n"
-            f"└ ❌ Javob bermadi: {calls_missed}\n\n"
-            f"🗓 <b>Sana:</b> {now.strftime('%d.%m.%Y')}\n\n"
+            f"└ ⏰ Muddati o'tgan: {expired}\n\n"
+            f"📞 <b>QO'NG'IROQLAR:</b> {calls_total} ta | ✅ {calls_answered} | ❌ {calls_missed}\n"
+            f"├ 1️⃣ 1 marta urinish: {one_attempt}\n"
+            f"├ 2️⃣ 2+ marta urinish: {two_plus_attempts}\n"
+            f"└ 🔕 Javob berilmadi: {unanswered}\n\n"
+            f"🗓 {now.strftime('%d.%m.%Y %H:%M')} | {data_source}\n\n"
             f"<i>Batafsil ko'rish uchun tugmalarni bosing:</i>"
         )
         await update.message.reply_text(message, reply_markup=reply_markup, parse_mode='HTML')
@@ -173,38 +232,89 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = []
 
-        if my_seller and my_seller.group_chat_id:
-            # Guruh ulangan - dashboard tugmalarini ko'rsatish
-            keyboard.append([
-                InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{my_seller.id}"),
-                InlineKeyboardButton("👥 Xodimlar", callback_data=f"seller_staff_{my_seller.id}")
-            ])
-            keyboard.append([InlineKeyboardButton("📝 Raqamni o'zgartirish", callback_data="change_phone")])
+        # Egasimi yoki xodimmi aniqlash
+        is_owner = my_seller and (
+            my_seller.telegram_user_id == str(user.id) or
+            not my_seller.telegram_user_id  # hali bog'lanmagan — egasi sifatida qabul qilamiz
+        )
 
+        if my_seller and my_seller.group_chat_id:
+            # Guruh ulangan - to'liq dashboard
+            keyboard = [
+                [
+                    InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{my_seller.id}"),
+                    InlineKeyboardButton("📋 Buyurtmalar", callback_data=f"seller_orders_{my_seller.id}_0"),
+                ],
+                [
+                    InlineKeyboardButton("👥 Xodimlar", callback_data=f"seller_staff_{my_seller.id}"),
+                    InlineKeyboardButton("📌 Bekor sabablari", callback_data=f"seller_cancel_stats_{my_seller.id}"),
+                ],
+            ]
+            # Faqat egasiga guruh sozlash tugmasi
+            if is_owner:
+                keyboard.append([
+                    InlineKeyboardButton("🔗 Guruh sozlash", callback_data=f"seller_group_settings_{my_seller.id}"),
+                    InlineKeyboardButton("📝 Telefon o'zgartirish", callback_data="change_phone"),
+                ])
+            else:
+                keyboard.append([InlineKeyboardButton("📝 Telefon o'zgartirish", callback_data="change_phone")])
+
+            group_info = my_seller.group_title or '✅ Ulangan'
             await update.message.reply_text(
-                f"👋 <b>Xush kelibsiz!</b>\n\n"
-                f"🏪 <b>Biznes:</b> {my_seller.full_name}\n"
-                f"📞 <b>Telefon:</b> {existing.phone}\n"
-                f"👥 <b>Guruh:</b> {my_seller.group_title or 'Ulangan'}\n\n"
-                f"Quyidagi tugmalardan foydalaning:",
+                f"👋 <b>Xush kelibsiz, {my_seller.full_name}!</b>\n\n"
+                f"📞 {existing.phone}\n"
+                f"👥 Guruh: {group_info}\n\n"
+                f"Kerakli bo'limni tanlang:",
+                parse_mode='HTML',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        elif my_seller and is_owner:
+            # Guruh ulanmagan — egasiga ulash imkoni
+            keyboard = [
+                [InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"seller_group_settings_{my_seller.id}")],
+                [InlineKeyboardButton("📝 Telefon o'zgartirish", callback_data="change_phone")],
+            ]
+            await update.message.reply_text(
+                f"👋 <b>{my_seller.full_name}</b>\n\n"
+                f"⚠️ Hali guruh ulanmagan.\n\n"
+                f"Guruh ulash uchun:\n"
+                f"1️⃣ Telegram guruh yarating\n"
+                f"2️⃣ Botni guruhga qo'shing\n"
+                f"3️⃣ Guruhda /start bosing\n\n"
+                f"Yoki guruh ID sini quyida kiriting:",
                 parse_mode='HTML',
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:
-            # Guruh ulanmagan
-            keyboard.append([InlineKeyboardButton("📝 Raqamni o'zgartirish", callback_data="change_phone")])
-            await update.message.reply_text(
-                f"👋 <b>Xush kelibsiz!</b>\n\n"
-                f"Siz allaqachon ro'yxatdan o'tgansiz.\n\n"
-                f"📞 <b>Telefon:</b> {existing.phone}\n\n"
-                f"Agar guruhingizni ulash kerak bo'lsa:\n"
-                f"1️⃣ Guruh yarating va botni qo'shing\n"
-                f"2️⃣ Guruhda /start bosing\n"
-                f"3️⃣ Telefon raqamingizni yuboring\n"
-                f"4️⃣ OTP kodi shu chatga keladi",
-                parse_mode='HTML',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            # Xodim sifatida biriktirilganmi tekshirish
+            from .models import Staff as _Staff
+            staff_entry = _Staff.get(phone=existing.phone, is_active=True)
+            if staff_entry:
+                from .models import Seller as _Sel
+                seller_biz = _Sel.get(id=staff_entry.seller_id)
+                biz_name = seller_biz.full_name if seller_biz else ""
+                keyboard = [[InlineKeyboardButton("📝 Telefon o'zgartirish", callback_data="change_phone")]]
+                await update.message.reply_text(
+                    f"👋 <b>Xush kelibsiz, {user.first_name}!</b>\n\n"
+                    f"🏪 <b>Biznes:</b> {biz_name}\n"
+                    f"🎭 <b>Rol:</b> Buyurtma xodimi\n\n"
+                    f"Buyurtmalar biznes guruhiga keladi.\n"
+                    f"Guruh xabarlaridagi tugmalar orqali buyurtmalarni qabul/rad qiling.",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                keyboard = [[InlineKeyboardButton("📝 Telefon o'zgartirish", callback_data="change_phone")]]
+                await update.message.reply_text(
+                    f"👋 <b>Xush kelibsiz!</b>\n\n"
+                    f"📞 <b>Telefon:</b> {existing.phone}\n\n"
+                    f"Agar guruhingizni ulash kerak bo'lsa:\n"
+                    f"1️⃣ Guruh yarating va botni qo'shing\n"
+                    f"2️⃣ Guruhda /start bosing\n"
+                    f"3️⃣ Telefon raqamingizni yuboring",
+                    parse_mode='HTML',
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
     else:
         # Yangi foydalanuvchi - telefon so'rash
         context.user_data['waiting_phone_registration'] = True
@@ -946,12 +1056,64 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def _handle_seller_group_id(update, context, text: str) -> bool:
+    """Biznes egasi kiritgan guruh ID ni qabul qilish"""
+    seller_id = context.user_data.get('waiting_seller_group_id')
+    if not seller_id:
+        return False
+    from .models import Seller
+    if not text.lstrip('-').isdigit():
+        await update.message.reply_text(
+            "❌ Noto'g'ri format. Guruh ID manfiy raqam bo'lishi kerak.\n"
+            "Masalan: <code>-1001234567890</code>\n\n"
+            "Guruh ID olish uchun guruhda /get_chat_id yuboring.",
+            parse_mode='HTML'
+        )
+        return True
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        context.user_data.pop('waiting_seller_group_id', None)
+        return True
+    try:
+        chat = await context.bot.get_chat(int(text))
+        title = chat.title or ""
+    except Exception:
+        await update.message.reply_text(
+            "❌ <b>Bot bu guruhda emas!</b>\n\nAvval botni guruhga qo'shing, so'ng ID yuboring.",
+            parse_mode='HTML'
+        )
+        return True
+    invite_link = ''
+    try:
+        invite_link = chat.invite_link or await context.bot.export_chat_invite_link(int(text))
+    except Exception:
+        pass
+    seller.group_chat_id = text
+    seller.group_title = title
+    seller.group_invite_link = invite_link
+    seller.save()
+    context.user_data.pop('waiting_seller_group_id', None)
+    keyboard = [[InlineKeyboardButton("◀️ Guruh sozlamalari", callback_data=f"seller_group_settings_{seller_id}")]]
+    await update.message.reply_text(
+        f"✅ <b>Guruh ulandi!</b>\n\n"
+        f"👥 <b>Guruh:</b> {title}\n"
+        f"🆔 <b>ID:</b> <code>{text}</code>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return True
+
+
 async def handle_group_id_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Guruh ID xabarini qabul qilish"""
+    text = update.message.text.strip() if update.message.text else ""
+
+    # Biznes egasi guruh ID kiritayaptimi? (admin tekshiruvisiz)
+    if context.user_data.get('waiting_seller_group_id'):
+        return await _handle_seller_group_id(update, context, text)
+
     if not await is_admin(update.effective_user.id):
         return False
-
-    text = update.message.text.strip() if update.message.text else ""
 
     # Admin guruh ID kutilayotgan bo'lsa (menyu orqali boshlangan)
     if context.user_data.get('waiting_admin_group'):
@@ -1602,6 +1764,42 @@ async def handle_menu_callback(update, context):
 # ADMIN TEXT MESSAGE HANDLERS
 # ==========================================
 
+async def _handle_admin_add_staff_input(update, context, text: str):
+    """Admin xodim qo'shish uchun ism va telefon qabul qilish"""
+    from .models import Staff
+    import uuid as _uuid
+
+    seller_id = context.user_data.get('admin_adding_staff_for')
+    step = context.user_data.get('admin_staff_step', 'name')
+
+    if step == 'name':
+        context.user_data['admin_staff_name'] = text
+        context.user_data['admin_staff_step'] = 'phone'
+        keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data=f"admin_seller_staff_{seller_id}")]]
+        await update.message.reply_text(
+            f"👤 Ism: <b>{text}</b>\n\nEndi <b>telefon raqamini</b> yuboring:\n<i>Masalan: +998901234567</i>",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif step == 'phone':
+        phone = text.strip()
+        if not phone.startswith('+'):
+            phone = '+998' + phone.lstrip('0')
+        context.user_data['admin_staff_phone'] = phone
+        context.user_data['admin_staff_step'] = 'role'
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Buyurtma xodimi qo'shish", callback_data=f"asr_{seller_id}_oh")],
+            [InlineKeyboardButton("❌ Bekor",                    callback_data=f"admin_seller_staff_{seller_id}")],
+        ]
+        await update.message.reply_text(
+            f"📞 Telefon: <b>{phone}</b>\n\nXodim <b>rolini</b> tanlang:",
+            parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    # role tanlanishi callback orqali keladi
+
+
 async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Admin text input handler - quyidagilarni qabul qiladi:
@@ -1628,6 +1826,23 @@ async def handle_admin_text_input(update: Update, context: ContextTypes.DEFAULT_
     if context.user_data.get('waiting_order_search'):
         context.user_data.pop('waiting_order_search', None)
         await callback_handler.search_order_by_id(text, update.message, context)
+        return True
+
+    # 1b. ADMIN XODIM QO'SHISH (faqat name yoki phone kutilayotganda)
+    if context.user_data.get('admin_adding_staff_for'):
+        step = context.user_data.get('admin_staff_step', 'name')
+        if step in ('name', 'phone'):
+            await _handle_admin_add_staff_input(update, context, text)
+            return True
+        else:
+            # role tanlash tugmalar orqali — text kerak emas, contextni tozala
+            for key in ('admin_adding_staff_for', 'admin_staff_step', 'admin_staff_name', 'admin_staff_phone'):
+                context.user_data.pop(key, None)
+
+    # 1c. BIZNES QIDIRISH
+    if context.user_data.get('waiting_seller_search'):
+        context.user_data.pop('waiting_seller_search', None)
+        await callback_handler.search_seller_by_name(text, update.message, context)
         return True
 
     # 2. SHABLON QO'SHISH

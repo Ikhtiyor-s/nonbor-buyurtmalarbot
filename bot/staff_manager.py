@@ -175,6 +175,15 @@ class StaffManager:
             'view_earnings': False,
             'manage_staff': False,
             'edit_settings': False
+        },
+        'order_handler': {
+            'view_orders': True,
+            'edit_status': True,
+            'cancel_orders': True,
+            'view_stats': False,
+            'view_earnings': False,
+            'manage_staff': False,
+            'edit_settings': False
         }
     }
 
@@ -182,7 +191,8 @@ class StaffManager:
         'owner': '👑 Egasi',
         'admin': '⚙️ Admin',
         'editor': '✏️ Tahrirlovchi',
-        'viewer': '👁️ Ko\'ruvchi'
+        'viewer': '👁️ Ko\'ruvchi',
+        'order_handler': '📋 Buyurtma xodimi'
     }
 
     def __init__(self, bot=None):
@@ -325,13 +335,14 @@ class StaffManager:
         # Rol tanlash
         keyboard = [
             [
-                InlineKeyboardButton("👁️ Ko'ruvchi", callback_data="setrole_viewer"),
-                InlineKeyboardButton("✏️ Tahrirlovchi", callback_data="setrole_editor")
+                InlineKeyboardButton("📋 Buyurtma xodimi", callback_data="setrole_order_handler"),
+                InlineKeyboardButton("✏️ Tahrirlovchi", callback_data="setrole_editor"),
             ],
             [
                 InlineKeyboardButton("⚙️ Admin", callback_data="setrole_admin"),
-                InlineKeyboardButton("❌ Bekor qilish", callback_data="staff_cancel")
-            ]
+                InlineKeyboardButton("👁️ Ko'ruvchi", callback_data="setrole_viewer"),
+            ],
+            [InlineKeyboardButton("❌ Bekor qilish", callback_data="staff_cancel")]
         ]
 
         await update.message.reply_text(

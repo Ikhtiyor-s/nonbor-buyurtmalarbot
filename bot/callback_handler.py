@@ -10,6 +10,44 @@ logger = logging.getLogger(__name__)
 # Pagination uchun konstantalar
 ITEMS_PER_PAGE = 10
 
+_STATUS_MAP = {
+    'ACCEPTED': 'Tasdiqlangan', 'CHECKING': 'Tekshirilmoqda',
+    'PENDING': 'Kutilmoqda', 'REJECTED': 'Rad etilgan',
+    'BLOCKED': 'Bloklangan', 'ACTIVE': 'Faol', 'INACTIVE': 'Faol emas',
+}
+
+
+def _fmt_seller(seller, idx: int = None, staff_list=None) -> str:
+    """Seller ma'lumotlarini bir xil formatda ko'rsatish (barcha ro'yxatlarda)"""
+    from .models import Staff as _Staff2
+    raw_status = (getattr(seller, 'business_status', '') or '').upper()
+    status_label = _STATUS_MAP.get(raw_status, raw_status) if raw_status else ''
+    status_part = f" <i>({status_label})</i>" if status_label else ''
+    prefix = f"<b>{idx}. {seller.full_name}</b>{status_part}\n" if idx else f"<b>{seller.full_name}</b>{status_part}\n"
+    line = prefix
+    line += f"    📞 {seller.phone}\n"
+    if getattr(seller, 'address', ''):
+        line += f"    📍 {seller.address}\n"
+    # Guruh holati
+    if seller.group_chat_id:
+        group_name = getattr(seller, 'group_title', '') or 'Guruh'
+        invite = getattr(seller, 'group_invite_link', '') or ''
+        if invite:
+            line += f"    👥 <a href=\"{invite}\">{group_name}</a>\n"
+        else:
+            line += f"    👥 {group_name}\n"
+    else:
+        line += f"    ⚠️ <i>Guruh ulanmagan</i>\n"
+    # Xodim holati
+    if staff_list is None:
+        staff_list = _Staff2.filter(seller_id=seller.id, is_active=True)
+    if staff_list:
+        names = ', '.join(s.full_name for s in staff_list)
+        line += f"    👤 {names}\n"
+    else:
+        line += f"    👤 <i>Xodim biriktirilmagan</i>\n"
+    return line
+
 # Viloyatlar ma'lumotlarini yuklash
 def load_regions():
     regions_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'regions.json')
@@ -79,7 +117,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from .models import Seller, PhoneRegistry
 
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     data = query.data
     user_id = query.from_user.id
@@ -95,7 +136,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "menu_set_group", "menu_test_order", "menu_stats", "menu_help",
         "back_to_regions", "notify_add", "notify_all", "notify_confirm", "notify_do_send", "notify_cancel",
         "stats_daily", "stats_weekly", "stats_monthly", "stats_yearly", "stats_all",
-        "as_cancel", "as_back_regions", "as_noop"
+        "as_cancel", "as_back_regions", "as_noop", "seller_search"
     }
 
     ADMIN_PREFIX_CALLBACKS = [
@@ -104,7 +145,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "notify_region_", "setgroup_region|", "setgroup_district|", "setgroup_",
         "edit_seller|", "edit_phone|", "cancel_edit|", "remove_group|", "testorder_",
         "cancelsetgroup_", "as_region_", "as_biz_", "as_page_",
-        "orders_list_", "calls_list_", "scheduled_list_"
+        "orders_list_", "calls_list_", "scheduled_list_", "cancel_reason_",
+        "admin_seller_staff_", "admin_add_staff_", "admin_remove_staff_", "admin_staff_role_",
+        "admin_staff_role_sel_", "asr_", "ars_"
     ]
 
     is_admin_callback = data in ADMIN_EXACT_CALLBACKS or any(data.startswith(p) for p in ADMIN_PREFIX_CALLBACKS)
@@ -116,7 +159,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     # SELLER CALLBACK - BIZNES EGASI TEKSHIRISH
     # ==========================================
-    SELLER_PREFIXES = ["seller_stats_", "seller_staff_", "seller_back_", "seller_settings_", "add_staff_"]
+    SELLER_PREFIXES = ["seller_stats_", "seller_staff_", "seller_back_", "seller_settings_",
+                       "add_staff_", "seller_orders_", "seller_cancel_stats_",
+                       "seller_group_settings_", "seller_group_remove_", "seller_group_setid_"]
 
     for prefix in SELLER_PREFIXES:
         if data.startswith(prefix):
@@ -186,6 +231,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id = data.replace("accept_", "")
         await accept_order(order_id, query)
 
+    elif data.startswith("back_to_order_"):
+        order_id = data.replace("back_to_order_", "")
+        from .models import Order
+        order = Order.get(external_id=order_id)
+        if order and order.status == 'new':
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Qabul qilish", callback_data=f"accept_{order_id}"),
+                 InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_{order_id}")]
+            ])
+            try:
+                await query.message.edit_reply_markup(reply_markup=keyboard)
+            except Exception:
+                pass
+        else:
+            await query.answer("Buyurtma allaqachon o'zgartirilgan", show_alert=True)
+
+    elif data.startswith("cancel_reason_"):
+        # cancel_reason_ORDERID_REASON
+        parts = data.split("_", 3)
+        if len(parts) == 4:
+            order_id = parts[2]
+            reason = parts[3]
+            await reject_order_with_reason(order_id, reason, query)
+
     elif data.startswith("ready_"):
         order_id = data.replace("ready_", "")
         await mark_order_ready(order_id, query)
@@ -200,7 +269,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data.startswith("reject_"):
         order_id = data.replace("reject_", "")
-        await reject_order(order_id, query)
+        await show_cancel_reason_menu(order_id, query)
 
     elif data == "menu_back" or data == "back_admin":
         # Admin panel asosiy menyuga qaytish
@@ -214,6 +283,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "admin_sellers":
         await show_regions_list(query)
+
+    elif data == "seller_search":
+        await show_seller_search_prompt(query, context)
 
     elif data == "admin_search":
         await show_order_search(query, context)
@@ -591,6 +663,85 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     # Seller Dashboard Callbacks
     # ==========================================
+    elif data.startswith("admin_seller_staff_"):
+        seller_id = data.replace("admin_seller_staff_", "")
+        await show_admin_seller_staff(query, seller_id, context)
+
+    elif data.startswith("admin_add_staff_"):
+        seller_id = data.replace("admin_add_staff_", "")
+        await start_admin_add_staff(query, seller_id, context)
+
+    elif data.startswith("admin_remove_staff_"):
+        # eski format — parts: admin_remove_staff_SELLERID_STAFFID
+        parts = data.split("_", 4)
+        if len(parts) == 5:
+            await do_admin_remove_staff(query, parts[3], parts[4])
+
+    elif data.startswith("ars_"):
+        # ars_{short_staff_id} — xodimni o'chirish (admin remove staff)
+        await do_admin_remove_staff_by_short(query, data[4:])
+
+    elif data.startswith("asr_"):
+        # asr_{seller_id}_{role_code} — yangi xodim roli saqlash
+        role_map = {'oh': 'order_handler', 'mg': 'manager', 'ed': 'editor', 'vw': 'viewer'}
+        rest = data[4:]
+        role_code = rest.rsplit("_", 1)[-1] if "_" in rest else ""
+        if role_code in role_map:
+            seller_id_part = rest.rsplit("_", 1)[0]
+            await save_admin_new_staff(query, context, seller_id_part, role_map[role_code])
+
+    elif data.startswith("admin_staff_role_sel_"):
+        # eski format (compat)
+        parts = data.split("_", 5)
+        if len(parts) == 6:
+            await save_admin_new_staff(query, context, parts[4], parts[5])
+
+    elif data.startswith("admin_staff_role_"):
+        # admin_staff_role_SELLERID_STAFFID_ROLE — mavjud xodim roli o'zgartirish
+        parts = data.split("_", 5)
+        if len(parts) == 6:
+            await set_admin_staff_role(query, parts[3], parts[4], parts[5])
+
+    elif data.startswith("seller_group_settings_"):
+        if query.message.chat.type != 'private':
+            await query.answer("Guruh sozlash uchun botga o'ting", show_alert=True)
+            return
+        seller_id = data.replace("seller_group_settings_", "")
+        await show_seller_group_settings(query, seller_id, context)
+
+    elif data.startswith("seller_group_remove_"):
+        seller_id = data.replace("seller_group_remove_", "")
+        await remove_seller_group(query, seller_id)
+
+    elif data.startswith("seller_group_setid_"):
+        seller_id = data.replace("seller_group_setid_", "")
+        context.user_data['waiting_seller_group_id'] = seller_id
+        keyboard = [[InlineKeyboardButton("❌ Bekor qilish", callback_data=f"seller_group_settings_{seller_id}")]]
+        await query.message.edit_text(
+            "🔗 <b>Guruh ID kiriting</b>\n\n"
+            "Guruh ID sini yuboring:\n"
+            "<i>Masalan: -1001234567890</i>\n\n"
+            "Guruh ID ni olish uchun guruhda /get_chat_id buyrug'ini yuboring.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data.startswith("seller_orders_"):
+        if query.message.chat.type != 'private':
+            await query.answer("📋 Buyurtmalarni ko'rish uchun botga o'ting", show_alert=True)
+            return
+        parts = data.split("_")
+        seller_id = parts[2]
+        page = int(parts[3]) if len(parts) > 3 else 0
+        await show_seller_orders(query, seller_id, page)
+
+    elif data.startswith("seller_cancel_stats_"):
+        if query.message.chat.type != 'private':
+            await query.answer("📌 Ko'rish uchun botga o'ting", show_alert=True)
+            return
+        seller_id = data.replace("seller_cancel_stats_", "")
+        await show_seller_cancel_stats(query, seller_id)
+
     elif data.startswith("seller_stats_"):
         # Sotuvchi statistikasi - faqat shaxsiy chatda
         if query.message.chat.type != 'private':
@@ -792,35 +943,10 @@ async def show_regions_list(query, page=0):
         message += f"📄 Sahifa: {page + 1}/{total_pages}\n"
     message += "\n"
 
-    STATUS_MAP = {
-        'ACCEPTED': 'Tasdiqlangan',
-        'CHECKING': 'Tekshirilmoqda',
-        'PENDING': 'Kutilmoqda',
-        'REJECTED': 'Rad etilgan',
-        'BLOCKED': 'Bloklangan',
-        'ACTIVE': 'Faol',
-        'INACTIVE': 'Faol emas',
-    }
     for i, seller in enumerate(page_sellers, start_idx + 1):
-        raw_status = (getattr(seller, 'business_status', '') or '').upper()
-        status_label = STATUS_MAP.get(raw_status, raw_status) if raw_status else ''
-        status_part = f" <i>({status_label})</i>" if status_label else ''
-        message += f"<b>{i}. {seller.full_name}</b>{status_part}\n"
-        message += f"    📞 {seller.phone}\n"
-        if hasattr(seller, 'address') and seller.address:
-            message += f"    📍 {seller.address}\n"
-        if seller.group_chat_id:
-            group_name = seller.group_title if hasattr(seller, 'group_title') and seller.group_title else "Guruh"
-            if hasattr(seller, 'group_invite_link') and seller.group_invite_link:
-                message += f"    👥 <a href=\"{seller.group_invite_link}\">{group_name}</a>\n"
-            else:
-                message += f"    👥 {group_name}\n"
-        else:
-            message += f"    ⚠️ <i>Guruh ulanmagan</i>\n"
-        message += "\n"
+        message += _fmt_seller(seller, idx=i) + "\n"
 
     message += "━━━━━━━━━━━━━━━━━━━━\n"
-    message += "✅ - Guruh ulangan | ⚠️ - Guruh ulanmagan\n\n"
     message += "🗺 <b>Viloyat bo'yicha filtrlash:</b>"
 
     # Viloyatlar bo'yicha guruhlash
@@ -867,9 +993,9 @@ async def show_regions_list(query, page=0):
         if pagination_btns:
             keyboard.append(pagination_btns)
 
-    # 4. Guruh ulash + Ortga
+    # 4. Qidiruv + Ortga
     keyboard.append([
-        InlineKeyboardButton("🔗 Guruh ulash", callback_data="menu_set_group"),
+        InlineKeyboardButton("🔍 Qidiruv", callback_data="seller_search"),
         InlineKeyboardButton("◀️ Ortga", callback_data="menu_back")
     ])
 
@@ -912,35 +1038,10 @@ async def show_districts_list(query, region_id, page=0):
         message += f"📄 Sahifa: {page + 1}/{total_pages}\n"
     message += "\n"
 
-    STATUS_MAP = {
-        'ACCEPTED': 'Tasdiqlangan',
-        'CHECKING': 'Tekshirilmoqda',
-        'PENDING': 'Kutilmoqda',
-        'REJECTED': 'Rad etilgan',
-        'BLOCKED': 'Bloklangan',
-        'ACTIVE': 'Faol',
-        'INACTIVE': 'Faol emas',
-    }
     for i, seller in enumerate(page_sellers, start_idx + 1):
-        raw_status = (getattr(seller, 'business_status', '') or '').upper()
-        status_label = STATUS_MAP.get(raw_status, raw_status) if raw_status else ''
-        status_part = f" <i>({status_label})</i>" if status_label else ''
-        message += f"<b>{i}. {seller.full_name}</b>{status_part}\n"
-        message += f"    📞 {seller.phone}\n"
-        if hasattr(seller, 'address') and seller.address:
-            message += f"    📍 {seller.address}\n"
-        if seller.group_chat_id:
-            group_name = seller.group_title if hasattr(seller, 'group_title') and seller.group_title else "Guruh"
-            if hasattr(seller, 'group_invite_link') and seller.group_invite_link:
-                message += f"    👥 <a href=\"{seller.group_invite_link}\">{group_name}</a>\n"
-            else:
-                message += f"    👥 {group_name}\n"
-        else:
-            message += f"    ⚠️ <i>Guruh ulanmagan</i>\n"
-        message += "\n"
+        message += _fmt_seller(seller, idx=i) + "\n"
 
     message += "━━━━━━━━━━━━━━━━━━━━\n"
-    message += "✅ - Guruh ulangan | ⚠️ - Guruh ulanmagan\n\n"
     message += "🗺 <b>Tuman bo'yicha filtrlash:</b>"
 
     # Tumanlar bo'yicha guruhlash
@@ -984,9 +1085,9 @@ async def show_districts_list(query, region_id, page=0):
         if pagination_btns:
             keyboard.append(pagination_btns)
 
-    # 3. Guruh ulash + Ortga bir qatorda
+    # 3. Qidiruv + Ortga
     keyboard.append([
-        InlineKeyboardButton("🔗 Guruh ulash", callback_data=f"setgroup_region|{region_id}"),
+        InlineKeyboardButton("🔍 Qidiruv", callback_data="seller_search"),
         InlineKeyboardButton("◀️ Ortga", callback_data="back_to_regions")
     ])
 
@@ -1036,23 +1137,9 @@ async def show_sellers_by_location(query, region_id, district_id, page=0):
     message += "\n"
 
     for i, seller in enumerate(page_sellers, start_idx + 1):
-        status = "✅" if seller.group_chat_id else "⚠️"
-        message += f"{status} <b>{i}. {seller.full_name}</b>\n"
-        message += f"    📞 {seller.phone}\n"
-        if hasattr(seller, 'address') and seller.address:
-            message += f"    📍 {seller.address}\n"
-        if seller.group_chat_id:
-            group_name = seller.group_title if hasattr(seller, 'group_title') and seller.group_title else "Guruh"
-            if hasattr(seller, 'group_invite_link') and seller.group_invite_link:
-                message += f"    👥 <a href=\"{seller.group_invite_link}\">{group_name}</a>\n"
-            else:
-                message += f"    👥 {group_name}\n"
-        else:
-            message += f"    ⚠️ <i>Guruh ulanmagan</i>\n"
-        message += "\n"
+        message += _fmt_seller(seller, idx=i) + "\n"
 
-    message += "━━━━━━━━━━━━━━━━━━━━\n"
-    message += "✅ - Guruh ulangan | ⚠️ - Guruh ulanmagan"
+    message += "━━━━━━━━━━━━━━━━━━━━"
 
     keyboard = []
 
@@ -1443,17 +1530,6 @@ async def show_edit_seller_menu(query, seller_id):
         await query.answer("Sotuvchi topilmadi!", show_alert=True)
         return
 
-    if seller.group_chat_id:
-        keyboard = [
-            [InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
-        ]
-    else:
-        keyboard = [
-            [InlineKeyboardButton("👥 Guruh ulash", callback_data=f"setgroup_{seller_id}")],
-            [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
-        ]
-
     # Guruh ma'lumotlari
     if seller.group_chat_id:
         group_name = seller.group_title if hasattr(seller, 'group_title') and seller.group_title else "Guruh"
@@ -1461,8 +1537,21 @@ async def show_edit_seller_menu(query, seller_id):
             group_info = f"👥 <b>Guruh:</b> <a href=\"{seller.group_invite_link}\">{group_name}</a>\n"
         else:
             group_info = f"👥 <b>Guruh:</b> {group_name} (ID: {seller.group_chat_id})\n"
+        group_btn = InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"remove_group|{seller_id}")
     else:
         group_info = "👥 <b>Guruh:</b> <i>Ulanmagan</i>\n"
+        group_btn = InlineKeyboardButton("👥 Guruh ulash", callback_data=f"setgroup_{seller_id}")
+
+    # Xodimlar soni
+    from .models import Staff as _Staff
+    staff_list = _Staff.filter(seller_id=seller_id, is_active=True)
+    staff_count = len(staff_list)
+
+    keyboard = [
+        [group_btn],
+        [InlineKeyboardButton(f"👤 Xodimlar ({staff_count})", callback_data=f"admin_seller_staff_{seller_id}")],
+        [InlineKeyboardButton("◀️ Ortga", callback_data=f"setgroup_{seller_id}")]
+    ]
 
     await query.message.edit_text(
         f"✏️ <b>Sotuvchini tahrirlash</b>\n\n"
@@ -1506,55 +1595,16 @@ async def ask_new_phone(query, seller_id, context):
 
 
 async def accept_order(order_id, query):
-    from .models import Order, Staff, Seller
+    from .models import Order
 
     order = Order.get(external_id=order_id)
-
     if not order:
         await query.answer("Buyurtma topilmadi!", show_alert=True)
         return
 
-    # Faqat menejer qabul qila oladi
     user_id = str(query.from_user.id)
-    seller = Seller.get(id=order.seller_id) if order.seller_id else None
-
-    logger.info(f"Accept order: user_id={user_id}, order_id={order_id}, seller_id={order.seller_id}")
-
-    is_manager = False
-
-    if seller:
-        logger.info(f"Seller: {seller.full_name}, owner_id={seller.telegram_user_id}")
-
-        # Biznes egasi bo'lsa - menejer hisoblanadi
-        if seller.telegram_user_id == user_id:
-            is_manager = True
-            logger.info(f"User is seller owner")
-
-        # Yoki staff jadvalida menejer sifatida ro'yxatdan o'tgan
-        if not is_manager:
-            # 1. telegram_user_id bo'yicha tekshirish
-            staff = Staff.get(seller_id=seller.id, telegram_user_id=user_id, is_active=True)
-            if staff and staff.role == 'manager':
-                is_manager = True
-                logger.info(f"User is manager by telegram_user_id")
-
-            # 2. staff_id bo'yicha tekshirish (xodim qo'shilganda telegram ID staff_id sifatida kiritilgan bo'lishi mumkin)
-            if not is_manager:
-                staff = Staff.get(seller_id=seller.id, staff_id=user_id, is_active=True)
-                if staff and staff.role == 'manager':
-                    is_manager = True
-                    logger.info(f"User is manager by staff_id")
-                    # telegram_user_id ni yangilash
-                    staff.telegram_user_id = user_id
-                    staff.save()
-
-        if not is_manager:
-            logger.info(f"User {user_id} is NOT a manager")
-    else:
-        logger.warning(f"Seller not found for order {order_id}")
-
-    if not is_manager:
-        await query.answer("⛔ Faqat biznes egasi yoki menejerlar buyurtmani qabul qila oladi!", show_alert=True)
+    if not await _check_order_permission(order, user_id):
+        await query.answer("⛔ Faqat biznes egasi yoki buyurtma xodimi qabul qila oladi!", show_alert=True)
         return
 
     order.status = 'accepted'
@@ -1572,61 +1622,42 @@ async def accept_order(order_id, query):
     except Exception:
         pass
 
-    # AmoCRM da ham statusni yangilash
-    if hasattr(order, 'amocrm_lead_id') and order.amocrm_lead_id:
-        try:
-            from .services.amocrm import AmoCRMService
-            amocrm = AmoCRMService()
-            await amocrm.update_lead_status(int(order.amocrm_lead_id), 'accepted')
-        except Exception as e:
-            logger.error(f"AmoCRM status update error: {e}")
+    # Nonbor API ga status yuborish
+    await _update_order_status_api(order.external_id, 'accepted')
 
     current_time = datetime.now().strftime('%H:%M %d.%m.%Y')
-
-    # Manzilni olish
     delivery_address = getattr(order, 'delivery_address', '') or ''
     delivery_type = getattr(order, 'delivery_type', 'delivery')
 
-    # Buyurtma qabul qilindi - endi "Tayyor" tugmasini ko'rsatish
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🍽 Tayyor", callback_data=f"ready_{order_id}")]
     ])
 
     new_text = query.message.text + (
-        f"\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"✅ <b>QABUL QILINDI</b>\n\n"
-        f"👤 Operator: {query.from_user.full_name}\n"
-        f"🕐 Vaqt: {current_time}\n"
+        f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"✅ <b>QABUL QILINDI</b>\n"
+        f"👤 {query.from_user.full_name} | 🕐 {current_time}\n"
     )
-
-    # Manzilni ko'rsatish
     if delivery_type == 'pickup':
-        new_text += f"\n🏪 <b>Turi:</b> Olib ketish"
+        new_text += f"🏪 Olib ketish"
     else:
-        new_text += f"\n🚚 <b>Turi:</b> Yetkazib berish"
+        new_text += f"🚚 Yetkazib berish"
         if delivery_address:
-            new_text += f"\n📍 <b>Manzil:</b> {delivery_address}"
+            new_text += f"\n📍 {delivery_address}"
 
-    new_text += f"\n\n<i>Buyurtma tayyor bo'lganda \"Tayyor\" tugmasini bosing</i>"
-
-    await query.edit_message_text(
-        text=new_text,
-        reply_markup=keyboard,
-        parse_mode='HTML'
-    )
-
+    await query.edit_message_text(text=new_text, reply_markup=keyboard, parse_mode='HTML')
     logger.info(f"Order {order_id} accepted by {query.from_user.id}")
 
 
 async def mark_order_ready(order_id, query):
     """Buyurtma tayyor - keyingi bosqichga o'tish"""
-    from .models import Order, Seller
-
+    from .models import Order
     order = Order.get(external_id=order_id)
-
     if not order:
         await query.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+    if not await _check_order_permission(order, str(query.from_user.id)):
+        await query.answer("⛔ Ruxsat yo'q!", show_alert=True)
         return
 
     # Buyurtma statusini yangilash
@@ -1696,11 +1727,12 @@ async def mark_order_ready(order_id, query):
 async def mark_order_delivering(order_id, query):
     """Buyurtma yetkazilmoqda"""
     from .models import Order
-
     order = Order.get(external_id=order_id)
-
     if not order:
         await query.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+    if not await _check_order_permission(order, str(query.from_user.id)):
+        await query.answer("⛔ Ruxsat yo'q!", show_alert=True)
         return
 
     # Buyurtma statusini yangilash
@@ -1743,11 +1775,12 @@ async def mark_order_delivering(order_id, query):
 async def mark_order_completed(order_id, query):
     """Buyurtma yakunlandi"""
     from .models import Order
-
     order = Order.get(external_id=order_id)
-
     if not order:
         await query.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+    if not await _check_order_permission(order, str(query.from_user.id)):
+        await query.answer("⛔ Ruxsat yo'q!", show_alert=True)
         return
 
     # Buyurtma statusini yangilash
@@ -1781,87 +1814,149 @@ async def mark_order_completed(order_id, query):
     logger.info(f"Order {order_id} completed by {query.from_user.id}")
 
 
-async def reject_order(order_id, query):
+async def _check_order_permission(order, user_id: str) -> bool:
+    """Foydalanuvchi buyurtmani o'zgartirish huquqi bormi? (egasi yoki manager/order_handler xodim)"""
+    from .models import Seller, Staff
+    seller = Seller.get(id=order.seller_id) if order.seller_id else None
+    if not seller:
+        return False
+    if seller.telegram_user_id == user_id:
+        return True
+    for lookup in [{'telegram_user_id': user_id}, {'staff_id': user_id}]:
+        staff = Staff.get(seller_id=seller.id, is_active=True, **lookup)
+        if staff and staff.role in ('manager', 'order_handler'):
+            if staff.role == 'order_handler' and not staff.telegram_user_id:
+                staff.telegram_user_id = user_id
+                staff.save()
+            return True
+    return False
+
+
+async def _update_order_status_api(external_id: str, status: str):
+    """Nonbor API ga order statusini yuborish"""
+    import aiohttp, os
+    if not external_id or str(external_id).startswith('TEST'):
+        return
+    base = os.getenv('EXTERNAL_API_URL', 'https://prod.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
+    if '/api/v2/' in base:
+        root = base.split('/api/v2/')[0]
+    else:
+        root = 'https://prod.nonbor.uz'
+    url = f"{root}/api/v2/telegram_bot/seller/order/{external_id}/"
+    secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
+    try:
+        timeout = aiohttp.ClientTimeout(total=8)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.patch(url,
+                json={'status': status},
+                headers={'X-Telegram-Bot-Secret': secret}
+            ) as resp:
+                if resp.status not in (200, 201, 204):
+                    logger.warning(f"Order API status update failed: {resp.status} for order {external_id}")
+    except Exception as e:
+        logger.warning(f"_update_order_status_api error: {e}")
+
+
+CANCEL_REASONS = [
+    ("🔒 Restoran yopiq",        "restoran_yopiq"),
+    ("🚫 Mahsulot tugagan",      "mahsulot_tugagan"),
+    ("🕐 Ish vaqtidan tashqari", "ish_vaqti"),
+    ("📦 Mingdan kam buyurtma",  "kam_buyurtma"),
+    ("🔧 Texnik nosozlik",       "texnik"),
+    ("✏️ Boshqa sabab",          "boshqa"),
+]
+
+
+async def show_cancel_reason_menu(order_id, query):
+    """Bekor qilish sababini tanlash menyusi"""
     from .models import Order, Staff, Seller
 
     order = Order.get(external_id=order_id)
-
     if not order:
         await query.answer("Buyurtma topilmadi!", show_alert=True)
         return
 
-    # Faqat menejer rad eta oladi
+    # Ruxsat tekshirish
     user_id = str(query.from_user.id)
-    seller = Seller.get(id=order.seller_id) if order.seller_id else None
-
-    is_manager = False
-
-    if seller:
-        # Biznes egasi bo'lsa - menejer hisoblanadi
-        if seller.telegram_user_id == user_id:
-            is_manager = True
-
-        # Yoki staff jadvalida menejer sifatida ro'yxatdan o'tgan
-        if not is_manager:
-            # 1. telegram_user_id bo'yicha tekshirish
-            staff = Staff.get(seller_id=seller.id, telegram_user_id=user_id, is_active=True)
-            if staff and staff.role == 'manager':
-                is_manager = True
-
-            # 2. staff_id bo'yicha tekshirish (xodim qo'shilganda telegram ID staff_id sifatida kiritilgan bo'lishi mumkin)
-            if not is_manager:
-                staff = Staff.get(seller_id=seller.id, staff_id=user_id, is_active=True)
-                if staff and staff.role == 'manager':
-                    is_manager = True
-                    # telegram_user_id ni yangilash (keyingi safar tezroq topilishi uchun)
-                    staff.telegram_user_id = user_id
-                    staff.save()
-
-    if not is_manager:
-        await query.answer("⛔ Faqat biznes egasi yoki menejerlar buyurtmani rad eta oladi!", show_alert=True)
+    if not await _check_order_permission(order, user_id):
+        await query.answer("⛔ Faqat biznes egasi yoki buyurtma xodimi bekor qila oladi!", show_alert=True)
         return
 
+    keyboard = []
+    for label, code in CANCEL_REASONS:
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"cancel_reason_{order_id}_{code}")])
+    keyboard.append([InlineKeyboardButton("◀️ Orqaga", callback_data=f"back_to_order_{order_id}")])
+
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def reject_order_with_reason(order_id, reason_code, query):
+    """Sabab bilan buyurtmani bekor qilish"""
+    from .models import Order, Seller
+
+    order = Order.get(external_id=order_id)
+    if not order:
+        await query.answer("Buyurtma topilmadi!", show_alert=True)
+        return
+
+    user_id = str(query.from_user.id)
+    if not await _check_order_permission(order, user_id):
+        await query.answer("⛔ Ruxsat yo'q!", show_alert=True)
+        return
+
+    reason_label = next((l for l, c in CANCEL_REASONS if c == reason_code), reason_code)
+
     order.status = 'cancelled'
+    order.cancel_reason = reason_label
     order.save()
+
     try:
         from .core import _archive_order
         _archive_order(order.external_id, order.seller_id, '', 'rejected', order.total_amount, order.items, order.notified_at)
     except Exception:
         pass
 
-    # Alert xabarini o'chirish
     try:
         from .core import clear_seller_alert
         await clear_seller_alert(order.seller_id, query.bot)
     except Exception:
         pass
 
-    # AmoCRM da ham statusni yangilash - BEKOR QILINDI
-    if hasattr(order, 'amocrm_lead_id') and order.amocrm_lead_id:
-        try:
-            from .services.amocrm import AmoCRMService
-            amocrm = AmoCRMService()
-            await amocrm.update_lead_status(int(order.amocrm_lead_id), 'cancelled')
-        except Exception as e:
-            logger.error(f"AmoCRM status update error: {e}")
+    # Nonbor API ga status yuborish
+    await _update_order_status_api(order.external_id, 'cancelled')
 
     current_time = datetime.now().strftime('%H:%M %d.%m.%Y')
-
     new_text = query.message.text + (
-        f"\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"❌ <b>BEKOR QILINDI</b>\n\n"
-        f"👤 Operator: {query.from_user.full_name}\n"
-        f"🕐 Vaqt: {current_time}"
+        f"\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        f"❌ <b>BEKOR QILINDI</b>\n"
+        f"📌 Sabab: {reason_label}\n"
+        f"👤 {query.from_user.full_name} | 🕐 {current_time}"
     )
 
-    await query.edit_message_text(
-        text=new_text,
-        reply_markup=None,
-        parse_mode='HTML'
-    )
+    await query.edit_message_text(text=new_text, reply_markup=None, parse_mode='HTML')
 
-    logger.info(f"Order {order_id} rejected by {query.from_user.id}")
+    # 60 soniyadan so'ng guruhdan o'chirish
+    import asyncio
+    seller = Seller.get(id=order.seller_id)
+    if seller and seller.group_chat_id and order.telegram_message_id:
+        async def _delayed_delete():
+            await asyncio.sleep(60)
+            try:
+                await query.bot.delete_message(
+                    chat_id=int(seller.group_chat_id),
+                    message_id=int(order.telegram_message_id)
+                )
+            except Exception:
+                pass
+        asyncio.create_task(_delayed_delete())
+
+    logger.info(f"Order {order_id} cancelled (reason: {reason_code}) by {query.from_user.id}")
+
+
+async def reject_order(order_id, query):
+    """Eski compat — sabab menyusiga yo'naltiradi"""
+    await show_cancel_reason_menu(order_id, query)
 
 
 # ==========================================
@@ -1870,26 +1965,40 @@ async def reject_order(order_id, query):
 
 async def show_seller_dashboard(query, seller_id):
     """Sotuvchi dashboardini ko'rsatish"""
-    from .models import Seller
+    from .models import Seller, Order
 
     seller = Seller.get(id=seller_id)
     if not seller:
         await query.answer("Sotuvchi topilmadi!", show_alert=True)
         return
 
+    all_orders = Order.load_all()
+    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_orders = [o for o in all_orders if o.get('seller_id') == seller_id and
+                    _order_after(o, today_start)]
+    pending = sum(1 for o in today_orders if o.get('status') == 'new')
+    accepted = sum(1 for o in today_orders if o.get('status') in ('accepted', 'ready', 'delivering', 'completed'))
+
     keyboard = [
         [
             InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{seller_id}"),
-            InlineKeyboardButton("👥 Xodimlar", callback_data=f"seller_staff_{seller_id}")
-        ]
+            InlineKeyboardButton("📋 Buyurtmalar", callback_data=f"seller_orders_{seller_id}_0"),
+        ],
+        [
+            InlineKeyboardButton("👥 Xodimlar", callback_data=f"seller_staff_{seller_id}"),
+            InlineKeyboardButton("📌 Bekor sabablari", callback_data=f"seller_cancel_stats_{seller_id}"),
+        ],
     ]
 
+    group_info = seller.group_title or ('✅ Ulangan' if seller.group_chat_id else '⚠️ Ulanmagan')
     await query.message.edit_text(
-        f"👋 <b>Dashboard</b>\n\n"
-        f"🏪 <b>Biznes:</b> {seller.full_name}\n"
-        f"📞 <b>Telefon:</b> {seller.phone}\n"
-        f"👥 <b>Guruh:</b> {seller.group_title or 'Ulangan'}\n\n"
-        f"Quyidagi tugmalardan foydalaning:",
+        f"🏪 <b>{seller.full_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📞 {seller.phone}\n"
+        f"👥 Guruh: {group_info}\n\n"
+        f"📦 Bugun: {len(today_orders)} ta buyurtma\n"
+        f"├ ⏳ Kutilmoqda: {pending}\n"
+        f"└ ✅ Qabul: {accepted}\n",
         parse_mode='HTML',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -1946,34 +2055,45 @@ async def show_seller_stats(query, seller_id):
     total_accepted = len([o for o in seller_orders if o.get('status') == 'accepted'])
     total_amount = sum(o.get('total_amount', 0) for o in seller_orders if o.get('status') == 'accepted')
 
+    # Bekor qilish sabablari (oylik)
+    monthly_cancelled = [o for o in monthly_orders if o.get('status') == 'cancelled']
+    cancel_reasons = {}
+    for o in monthly_cancelled:
+        r = o.get('cancel_reason') or 'Sabab ko\'rsatilmagan'
+        cancel_reasons[r] = cancel_reasons.get(r, 0) + 1
+
     keyboard = [
         [
-            InlineKeyboardButton("👥 Xodimlar", callback_data=f"seller_staff_{seller_id}"),
+            InlineKeyboardButton("📋 Buyurtmalar", callback_data=f"seller_orders_{seller_id}_0"),
             InlineKeyboardButton("🔄 Yangilash", callback_data=f"seller_stats_{seller_id}")
         ],
-        [InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")]
+        [
+            InlineKeyboardButton("📌 Bekor sabablari", callback_data=f"seller_cancel_stats_{seller_id}"),
+            InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")
+        ]
     ]
 
     stats_message = (
-        f"📊 <b>Statistika - {seller.full_name}</b>\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📅 <b>Bugungi:</b>\n"
-        f"    Buyurtmalar: {daily_total} ta\n"
-        f"    ✅ Qabul: {daily_accepted} ta\n"
-        f"    ❌ Rad: {daily_rejected} ta\n"
-        f"    💰 Summa: {int(daily_amount) // 100:,} so'm\n\n".replace(",", " ") +
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📆 <b>Shu oy:</b>\n"
-        f"    Buyurtmalar: {monthly_total} ta\n"
-        f"    ✅ Qabul: {monthly_accepted} ta\n"
-        f"    ❌ Rad: {monthly_rejected} ta\n"
-        f"    💰 Summa: {int(monthly_amount) // 100:,} so'm\n\n".replace(",", " ") +
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "📊 <b>Umumiy:</b>\n"
-        f"    Jami buyurtmalar: {total_orders} ta\n"
-        f"    ✅ Qabul qilingan: {total_accepted} ta\n"
-        f"    💰 Jami summa: {int(total_amount) // 100:,} so'm".replace(",", " ")
-    )
+        f"📊 <b>Statistika — {seller.full_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📅 <b>Bugun:</b>\n"
+        f"├ Jami: {daily_total} ta\n"
+        f"├ ✅ Qabul: {daily_accepted} | ❌ Bekor: {daily_rejected}\n"
+        f"└ 💰 {daily_amount // 100:,} so'm\n\n"
+        f"📆 <b>Shu oy:</b>\n"
+        f"├ Jami: {monthly_total} ta\n"
+        f"├ ✅ Qabul: {monthly_accepted} | ❌ Bekor: {monthly_rejected}\n"
+        f"└ 💰 {monthly_amount // 100:,} so'm\n\n"
+        f"📊 <b>Umumiy:</b>\n"
+        f"├ Jami: {total_orders} ta buyurtma\n"
+        f"├ ✅ Qabul: {total_accepted} ta\n"
+        f"└ 💰 {total_amount // 100:,} so'm"
+    ).replace(",", " ")
+
+    if cancel_reasons:
+        stats_message += f"\n\n📌 <b>Oylik bekor sabablari:</b>\n"
+        for reason, cnt in sorted(cancel_reasons.items(), key=lambda x: -x[1]):
+            stats_message += f"├ {reason}: {cnt} ta\n"
 
     try:
         await query.message.edit_text(
@@ -1987,6 +2107,362 @@ async def show_seller_stats(query, seller_id):
             parse_mode='HTML',
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+
+def _order_after(o: dict, dt) -> bool:
+    for key in ('notified_at', 'created_at'):
+        ts = o.get(key, '')
+        if ts:
+            try:
+                return datetime.fromisoformat(ts.replace('Z', '+00:00')).replace(tzinfo=None) >= dt
+            except Exception:
+                pass
+    return False
+
+
+async def show_seller_orders(query, seller_id, page: int = 0):
+    """Merchant buyurtmalar tarixi (pagination bilan)"""
+    from .models import Seller, Order
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        await query.answer("Sotuvchi topilmadi!", show_alert=True)
+        return
+
+    all_orders = Order.load_all()
+    orders = [o for o in all_orders if o.get('seller_id') == seller_id]
+    orders.sort(key=lambda o: o.get('notified_at', o.get('created_at', '')), reverse=True)
+
+    PAGE = 8
+    total = len(orders)
+    total_pages = max(1, (total + PAGE - 1) // PAGE)
+    page = max(0, min(page, total_pages - 1))
+    slice_ = orders[page * PAGE: page * PAGE + PAGE]
+
+    STATUS_EMOJI = {
+        'new': '⏳', 'accepted': '✅', 'ready': '🍽',
+        'delivering': '🚴', 'completed': '🏁', 'cancelled': '❌',
+        'rejected': '❌', 'expired': '⏰',
+    }
+
+    msg = f"📋 <b>{seller.full_name} — Buyurtmalar</b>\n"
+    msg += f"📄 Sahifa {page+1}/{total_pages} | Jami: {total} ta\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━\n"
+
+    for o in slice_:
+        st = o.get('status', 'new')
+        em = STATUS_EMOJI.get(st, '❓')
+        ts = (o.get('notified_at') or o.get('created_at', ''))[:16].replace('T', ' ')
+        amt = o.get('total_amount', 0) // 100
+        msg += f"{em} <b>#{o.get('external_id','?')}</b> — {amt:,} so'm\n".replace(",", " ")
+        msg += f"   🕐 {ts}\n"
+        if st == 'cancelled' and o.get('cancel_reason'):
+            msg += f"   📌 {o['cancel_reason']}\n"
+        msg += "\n"
+
+    keyboard = []
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️", callback_data=f"seller_orders_{seller_id}_{page-1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton("➡️", callback_data=f"seller_orders_{seller_id}_{page+1}"))
+    if nav:
+        keyboard.append(nav)
+    keyboard.append([
+        InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{seller_id}"),
+        InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")
+    ])
+
+    try:
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        await query.message.reply_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def show_seller_cancel_stats(query, seller_id):
+    """Bekor qilish sabablari to'liq tahlili"""
+    from .models import Seller, Order
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        return
+
+    all_orders = Order.load_all()
+    month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    cancelled = [o for o in all_orders
+                 if o.get('seller_id') == seller_id
+                 and o.get('status') in ('cancelled', 'rejected')
+                 and _order_after(o, month_start)]
+
+    reasons = {}
+    for o in cancelled:
+        r = o.get('cancel_reason') or "Sabab ko'rsatilmagan"
+        reasons[r] = reasons.get(r, 0) + 1
+
+    msg = f"📌 <b>{seller.full_name} — Bekor sabablari (shu oy)</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"Jami bekor: {len(cancelled)} ta\n\n"
+
+    if reasons:
+        for reason, cnt in sorted(reasons.items(), key=lambda x: -x[1]):
+            pct = round(cnt / len(cancelled) * 100) if cancelled else 0
+            bar = '█' * (pct // 10) + '░' * (10 - pct // 10)
+            msg += f"<b>{reason}</b>\n"
+            msg += f"{bar} {cnt} ta ({pct}%)\n\n"
+    else:
+        msg += "Bu oy bekor qilingan buyurtma yo'q ✅"
+
+    keyboard = [[
+        InlineKeyboardButton("📊 Statistika", callback_data=f"seller_stats_{seller_id}"),
+        InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")
+    ]]
+
+    try:
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        await query.message.reply_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+ADMIN_ROLE_NAMES = {
+    'manager':       '⚙️ Menejer',
+    'order_handler': '📋 Buyurtma xodimi',
+    'editor':        '✏️ Tahrirlovchi',
+    'viewer':        '👁️ Ko\'ruvchi',
+}
+
+
+async def save_admin_new_staff(query, context, seller_id, role):
+    """Yangi xodimni saqlash (admin tomonidan qo'shilgan)"""
+    import uuid as _uuid
+    from .models import Staff, Seller
+
+    name = context.user_data.pop('admin_staff_name', '')
+    phone = context.user_data.pop('admin_staff_phone', '')
+    context.user_data.pop('admin_adding_staff_for', None)
+    context.user_data.pop('admin_staff_step', None)
+
+    if not name or not phone:
+        await query.answer("❌ Ma'lumot to'liq emas", show_alert=True)
+        return
+
+    seller = Seller.get(id=seller_id)
+    seller_name = seller.full_name if seller else seller_id
+
+    staff = Staff(
+        id=str(_uuid.uuid4()),
+        seller_id=seller_id,
+        staff_id='',
+        full_name=name,
+        phone=phone,
+        role=role,
+        is_active=True
+    )
+    staff.save()
+
+    role_label = ADMIN_ROLE_NAMES.get(role, role)
+
+    keyboard = [
+        [InlineKeyboardButton("👤 Xodimlar ro'yxati", callback_data=f"admin_seller_staff_{seller_id}")],
+        [InlineKeyboardButton("◀️ Biznesga qaytish",  callback_data=f"edit_seller|{seller_id}")],
+    ]
+    await query.message.reply_text(
+        f"✅ <b>Xodim qo'shildi!</b>\n\n"
+        f"🏪 Biznes: <b>{seller_name}</b>\n"
+        f"👤 Ism: <b>{name}</b>\n"
+        f"📞 Telefon: <b>{phone}</b>\n"
+        f"🎭 Rol: <b>{role_label}</b>\n\n"
+        f"<i>Xodim botga /start bosib, telefon raqamini yuborishi kerak.</i>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def show_admin_seller_staff(query, seller_id, context=None):
+    # Context bo'lsa — staff qo'shish holatini tozalash
+    if context:
+        for key in ('admin_adding_staff_for', 'admin_staff_step', 'admin_staff_name', 'admin_staff_phone'):
+            context.user_data.pop(key, None)
+    """Admin — biznesning xodimlarini ko'rish va boshqarish"""
+    from .models import Seller, Staff
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        await query.answer("Sotuvchi topilmadi!", show_alert=True)
+        return
+
+    staff_list = Staff.filter(seller_id=seller_id, is_active=True)
+
+    msg = f"👤 <b>{seller.full_name} — Xodimlar</b>\n"
+    msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    keyboard = []
+    if staff_list:
+        for s in staff_list:
+            role_label = ADMIN_ROLE_NAMES.get(s.role, s.role)
+            tg = f"@{s.telegram_user_id}" if s.telegram_user_id else "bog'lanmagan"
+            msg += f"• {s.full_name} — {role_label}\n"
+            msg += f"  📞 {s.phone} | 🆔 {tg}\n\n"
+            # staff ID ni qisqartirish (64 bayt limit uchun)
+            short_sid = s.id[:12] if s.id else s.id
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🗑 {s.full_name}",
+                    callback_data=f"ars_{short_sid}"
+                )
+            ])
+    else:
+        msg += "Hali xodim yo'q.\n"
+
+    keyboard.append([InlineKeyboardButton("➕ Buyurtma xodimi qo'shish", callback_data=f"admin_add_staff_{seller_id}")])
+    keyboard.append([InlineKeyboardButton("◀️ Biznesga qaytish", callback_data=f"edit_seller|{seller_id}")])
+
+    try:
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        await query.message.reply_text(msg, parse_mode='HTML', reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def start_admin_add_staff(query, seller_id, context):
+    """Admin — yangi xodim qo'shish (ism va telefon so'rash)"""
+    from .models import Seller
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        await query.answer("Sotuvchi topilmadi!", show_alert=True)
+        return
+
+    context.user_data['admin_adding_staff_for'] = seller_id
+    context.user_data['admin_staff_step'] = 'name'
+
+    keyboard = [[InlineKeyboardButton("❌ Bekor", callback_data=f"admin_seller_staff_{seller_id}")]]
+    await query.message.edit_text(
+        f"➕ <b>Yangi xodim — {seller.full_name}</b>\n\n"
+        f"Xodimning <b>to'liq ismini</b> yuboring:",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def do_admin_remove_staff_by_short(query, short_id: str):
+    """Qisqa ID (12 char prefix) bo'yicha xodimni o'chirish"""
+    from .models import Staff
+    all_staff = Staff.load_all()
+    staff_data = next((s for s in all_staff if s.get('id', '').startswith(short_id)), None)
+    if not staff_data:
+        await query.answer("Xodim topilmadi!", show_alert=True)
+        return
+    seller_id = staff_data.get('seller_id', '')
+    staff_id = staff_data.get('id', '')
+    await do_admin_remove_staff(query, seller_id, staff_id)
+
+
+async def do_admin_remove_staff(query, seller_id, staff_id):
+    """Admin — xodimni o'chirish"""
+    from .models import Staff
+
+    staff = Staff.get(id=staff_id)
+    if staff:
+        staff.is_active = False
+        staff.save()
+        await query.answer(f"✅ {staff.full_name} o'chirildi", show_alert=True)
+
+    # Refresh
+    class _FakeQuery:
+        def __init__(self, q):
+            self.message = q.message
+            self.from_user = q.from_user
+        async def answer(self, *a, **kw): pass
+
+    await show_admin_seller_staff(_FakeQuery(query), seller_id, None)
+
+
+async def set_admin_staff_role(query, seller_id, staff_id, role):
+    """Admin — xodim rolini o'zgartirish"""
+    from .models import Staff
+
+    staff = Staff.get(id=staff_id)
+    if staff:
+        staff.role = role
+        staff.save()
+        await query.answer(f"✅ Rol o'zgartirildi: {ADMIN_ROLE_NAMES.get(role, role)}", show_alert=True)
+
+
+async def show_seller_group_settings(query, seller_id, context=None):
+    """Egasi uchun guruh sozlash menyusi"""
+    from .models import Seller
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        await query.answer("Sotuvchi topilmadi!", show_alert=True)
+        return
+
+    # Faqat egasiga ruxsat
+    user_id = str(query.from_user.id)
+    if seller.telegram_user_id and seller.telegram_user_id != user_id:
+        await query.answer("⛔ Faqat biznes egasi guruhni boshqara oladi!", show_alert=True)
+        return
+
+    if seller.group_chat_id:
+        group_name = seller.group_title or "Noma'lum"
+        group_link = getattr(seller, 'group_invite_link', '') or ''
+        group_info = f"<a href=\"{group_link}\">{group_name}</a>" if group_link else group_name
+        msg = (
+            f"🔗 <b>Guruh sozlamalari</b>\n\n"
+            f"🏪 <b>Biznes:</b> {seller.full_name}\n"
+            f"👥 <b>Joriy guruh:</b> {group_info}\n"
+            f"🆔 <b>Guruh ID:</b> <code>{seller.group_chat_id}</code>\n\n"
+            f"Nima qilmoqchisiz?"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🔄 Guruhni o'zgartirish", callback_data=f"seller_group_setid_{seller_id}")],
+            [InlineKeyboardButton("🗑 Guruhni o'chirish", callback_data=f"seller_group_remove_{seller_id}")],
+            [InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")],
+        ]
+    else:
+        msg = (
+            f"🔗 <b>Guruh ulash</b>\n\n"
+            f"🏪 <b>Biznes:</b> {seller.full_name}\n"
+            f"⚠️ Hali guruh ulanmagan.\n\n"
+            f"<b>1-usul:</b> Guruhda /start bosing va telefon raqamingizni yuboring\n\n"
+            f"<b>2-usul:</b> Guruh ID sini quyida kiriting"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🆔 Guruh ID kiritish", callback_data=f"seller_group_setid_{seller_id}")],
+            [InlineKeyboardButton("◀️ Ortga", callback_data=f"seller_back_{seller_id}")],
+        ]
+
+    try:
+        await query.message.edit_text(msg, parse_mode='HTML',
+                                      reply_markup=InlineKeyboardMarkup(keyboard),
+                                      disable_web_page_preview=True)
+    except Exception:
+        await query.message.reply_text(msg, parse_mode='HTML',
+                                       reply_markup=InlineKeyboardMarkup(keyboard),
+                                       disable_web_page_preview=True)
+
+
+async def remove_seller_group(query, seller_id):
+    """Guruhni o'chirish (faqat egasi)"""
+    from .models import Seller
+
+    seller = Seller.get(id=seller_id)
+    if not seller:
+        await query.answer("Sotuvchi topilmadi!", show_alert=True)
+        return
+
+    user_id = str(query.from_user.id)
+    if seller.telegram_user_id and seller.telegram_user_id != user_id:
+        await query.answer("⛔ Faqat biznes egasi guruhni o'chira oladi!", show_alert=True)
+        return
+
+    old_group = seller.group_title or seller.group_chat_id or "Guruh"
+    seller.group_chat_id = ''
+    seller.group_title = ''
+    seller.group_invite_link = ''
+    seller.save()
+
+    await query.answer(f"✅ '{old_group}' guruh o'chirildi", show_alert=True)
+    await show_seller_group_settings(query, seller_id)
 
 
 async def show_seller_staff(query, seller_id):
@@ -3593,3 +4069,75 @@ async def do_send_notification(query, context):
     # Context tozalash
     context.user_data.pop('sending_template', None)
     context.user_data.pop('selected_regions', None)
+
+
+# ==========================================
+# BIZNES QIDIRISH
+# ==========================================
+
+async def show_seller_search_prompt(query, context):
+    """Biznes qidiruv so'rovi"""
+    # Staff qo'shish holatini tozalash
+    for key in ('admin_adding_staff_for', 'admin_staff_step', 'admin_staff_name', 'admin_staff_phone'):
+        context.user_data.pop(key, None)
+    context.user_data['waiting_seller_search'] = True
+    keyboard = [[InlineKeyboardButton("◀️ Ortga", callback_data="admin_sellers")]]
+    await query.message.edit_text(
+        "🔍 <b>Biznes qidirish</b>\n\n"
+        "Biznes nomini yozing (yoki telefon raqamini):\n"
+        "<i>Masalan: Pissa, YesCatering, +99890...</i>",
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def search_seller_by_name(text: str, message, context):
+    """Biznes nomini qidirish va natijalarni ko'rsatish"""
+    from .models import Seller
+
+    query_lower = text.lower().strip()
+    all_sellers = Seller.filter(is_active=True)
+
+    matched = [
+        s for s in all_sellers
+        if query_lower in s.full_name.lower()
+        or query_lower in (s.phone or '').replace(' ', '').replace('-', '')
+        or query_lower in (getattr(s, 'business_phone', '') or '').replace(' ', '').replace('-', '')
+    ]
+
+    if not matched:
+        keyboard = [[InlineKeyboardButton("🔍 Yangi qidiruv", callback_data="seller_search"),
+                     InlineKeyboardButton("◀️ Ortga", callback_data="admin_sellers")]]
+        await message.reply_text(
+            f"🔍 <b>«{text}»</b> bo'yicha natija topilmadi.",
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    display = matched[:20]
+    result = f"🔍 <b>«{text}»</b> — {len(matched)} ta natija:\n\n"
+    for i, s in enumerate(display, 1):
+        result += _fmt_seller(s, idx=i) + "\n"
+
+    if len(matched) > 20:
+        result += f"<i>...va yana {len(matched) - 20} ta. Qidiruvni aniqlashtiring.</i>\n"
+
+    keyboard = []
+
+    # Raqam tugmalari — biznes sahifasiga o'tish
+    num_buttons = [
+        InlineKeyboardButton(str(i + 1), callback_data=f"edit_seller|{s.id}")
+        for i, s in enumerate(display)
+    ]
+    for i in range(0, len(num_buttons), 5):
+        keyboard.append(num_buttons[i:i + 5])
+
+    keyboard.append([
+        InlineKeyboardButton("🔍 Yangi qidiruv", callback_data="seller_search"),
+        InlineKeyboardButton("◀️ Ortga", callback_data="admin_sellers")
+    ])
+
+    await message.reply_text(result, parse_mode='HTML',
+                             reply_markup=InlineKeyboardMarkup(keyboard),
+                             disable_web_page_preview=True)

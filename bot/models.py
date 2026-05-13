@@ -300,7 +300,8 @@ class Order:
                  created_at=None, updated_at=None, amocrm_lead_id=None,
                  delivery_address='', delivery_type='delivery',
                  order_delivery_method='', payment_method='',
-                 planned_datetime='', source='', seller_name='', **kwargs):
+                 planned_datetime='', source='', seller_name='',
+                 cancel_reason='', **kwargs):
         self.id = id or str(uuid.uuid4())
         self.external_id = external_id
         self.seller_id = seller_id
@@ -321,6 +322,7 @@ class Order:
         self.planned_datetime = planned_datetime
         self.source = source
         self.seller_name = seller_name
+        self.cancel_reason = cancel_reason
 
     def to_dict(self):
         return {
@@ -344,6 +346,7 @@ class Order:
             'planned_datetime': self.planned_datetime,
             'source': self.source,
             'seller_name': self.seller_name,
+            'cancel_reason': self.cancel_reason,
         }
 
     @classmethod
@@ -511,6 +514,20 @@ class AdminSettings:
             phones.remove(phone)
             data['admin_phones'] = phones
             cls._save(data)
+        # O'sha telefon raqamga bog'liq Telegram ID ni ham extra_admin_ids dan o'chirish
+        try:
+            registry_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'phone_registry.json')
+            if os.path.exists(registry_file):
+                import json as _json
+                with open(registry_file, 'r', encoding='utf-8') as f:
+                    registry = _json.load(f)
+                for entry in registry:
+                    if entry.get('phone') == phone:
+                        tg_id = str(entry.get('telegram_user_id', ''))
+                        if tg_id:
+                            cls.remove_extra_admin_id(tg_id)
+        except Exception:
+            pass
 
     @classmethod
     def get_extra_admin_ids(cls) -> list:

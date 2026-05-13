@@ -271,7 +271,7 @@ async def update_admin_group_summary():
 logger = logging.getLogger(__name__)
 
 # Buyurtma muddati (daqiqada) - shu vaqtdan keyin o'chiriladi
-ORDER_EXPIRY_MINUTES = int(os.getenv('ORDER_EXPIRY_MINUTES', 30))
+ORDER_EXPIRY_MINUTES = int(os.getenv('ORDER_EXPIRY_MINUTES', 10))
 
 def _append_health_log(event: str, **kwargs):
     """Health tarixga yozish: 'down' yoki 'up'"""
@@ -584,6 +584,163 @@ class NotificationBot:
             logger.error(f"Error saving order: {e}")
 
 
+async def fetch_order_stats_12h() -> dict | None:
+    """
+    Nonbor /order/dashboard/orders/ dan oxirgi 12 soat statistikasini olish.
+    JWT token bo'lsa ishlaydi, yo'q bo'lsa None qaytaradi.
+    Response: {"SAVATDA": 10, "ACCEPTED": 2, ...}
+    """
+    jwt_token = os.getenv('DASHBOARD_JWT_TOKEN', '').strip()
+    if not jwt_token:
+        return None
+
+    base_url = os.getenv('EXTERNAL_API_URL', 'https://prod.nonbor.uz/api/v2/telegram_bot/get-order-for-courier/')
+    # base URL dan faqat kerakli qismni olish
+    if '/api/v2/' in base_url:
+        base = base_url.split('/api/v2/')[0]
+    else:
+        base = 'https://prod.nonbor.uz'
+
+    import datetime as _dt
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    from_dt = (now_utc - _dt.timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    to_dt = now_utc.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+
+    try:
+        headers = {'Authorization': f'Bearer {jwt_token}', 'Accept': 'application/json'}
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f'{base}/api/v2/order/dashboard/orders/',
+                headers=headers,
+                params={'from_datetime': from_dt, 'to_datetime': to_dt}
+            ) as resp:
+                if resp.status == 401:
+                    logger.warning('Dashboard JWT token noto\'g\'ri yoki muddati o\'tgan')
+                    return None
+                if resp.status != 200:
+                    logger.error(f'Dashboard orders API error: {resp.status}')
+                    return None
+                data = await resp.json()
+
+        state_map = data.get('data', {})
+        if not isinstance(state_map, dict):
+            return None
+
+        counts = {}
+        for state, orders in state_map.items():
+            counts[state] = len(orders) if isinstance(orders, list) else 0
+        return counts
+
+    except Exception as e:
+        logger.error(f'fetch_order_stats_12h xato: {e}')
+        return None
+
+
+async def fetch_call_stats_from_ip_phone(hours: int = 12) -> dict | None:
+    """
+    IP telefon (Autodialer) API dan so'nggi N soatlik qo'ng'iroq statistikasini olish.
+    /api/autodialer/calls?period=weekly dan barcha recordlarni olib, bot tomonda filtrlaydi.
+    Restart ga bog'liq emas — IP telefon stats.json ga saqlaydi.
+    """
+    notify_url = os.getenv('AUTODIALER_NOTIFY_URL', '').strip()
+    if not notify_url:
+        return None
+
+    base_url = notify_url.rsplit('/', 1)[0] if notify_url.endswith('/notify') else notify_url.rstrip('/')
+    api_key = os.getenv('AUTODIALER_API_KEY') or os.getenv('EXTERNAL_API_SECRET', '')
+
+    try:
+        headers = {'X-API-Key': api_key}
+        timeout = aiohttp.ClientTimeout(total=10)
+        cutoff = datetime.now() - timedelta(hours=hours)
+
+        all_records = []
+        page = 1
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            while True:
+                async with session.get(
+                    f'{base_url}/api/autodialer/calls',
+                    headers=headers,
+                    params={'period': 'weekly', 'page': page, 'page_size': 100}
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f'IP telefon calls API error: {resp.status}')
+                        return None
+                    data = await resp.json()
+
+                inner = data.get('data', {})
+                records = inner.get('records', [])
+                all_records.extend(records)
+
+                total_pages = inner.get('total_pages', 1)
+                if page >= total_pages:
+                    break
+                page += 1
+
+        # Oxirgi N soatga filtrlash
+        filtered = []
+        for r in all_records:
+            ts = r.get('timestamp', '')
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace('Z', '+00:00')).replace(tzinfo=None)
+                if dt >= cutoff:
+                    filtered.append(r)
+            except Exception:
+                pass
+
+        total_calls    = len(filtered)
+        answered_calls = sum(1 for r in filtered if r.get('result') == 'answered')
+        unanswered     = total_calls - answered_calls
+        one_attempt    = sum(1 for r in filtered if r.get('attempts', 0) == 1)
+        two_attempts   = sum(1 for r in filtered if r.get('attempts', 0) == 2)
+        three_plus     = sum(1 for r in filtered if r.get('attempts', 0) >= 3)
+
+        return {
+            'total_calls':      total_calls,
+            'answered_calls':   answered_calls,
+            'unanswered_calls': unanswered,
+            'calls_1_attempt':  one_attempt,
+            'calls_2_attempts': two_attempts,
+            'calls_3_attempts': three_plus,
+        }
+
+    except Exception as e:
+        logger.warning(f'fetch_call_stats_from_ip_phone xato: {e}')
+        return None
+
+
+_REGION_NAME_TO_ID = {
+    'toshkent shahri':              'toshkent_shahar',
+    'toshkent shahar':              'toshkent_shahar',
+    'toshkent shahr':               'toshkent_shahar',
+    'toshkent viloyati':            'toshkent_viloyati',
+    'andijon viloyati':             'andijon',
+    'buxoro viloyati':              'buxoro',
+    "farg'ona viloyati":            'fargona',
+    'fargona viloyati':             'fargona',
+    'jizzax viloyati':              'jizzax',
+    'xorazm viloyati':              'xorazm',
+    'namangan viloyati':            'namangan',
+    'navoiy viloyati':              'navoiy',
+    'qashqadaryo viloyati':         'qashqadaryo',
+    'samarqand viloyati':           'samarqand',
+    'sirdaryo viloyati':            'sirdaryo',
+    'surxondaryo viloyati':         'surxondaryo',
+    "qoraqalpog'iston":             'qoraqalpogiston',
+    "qoraqalpog'iston respublikasi":'qoraqalpogiston',
+}
+
+def _normalize_region(name: str) -> str:
+    """API region nomini regions.json IDga o'girish"""
+    if not name:
+        return name
+    key = name.strip().lower()
+    return _REGION_NAME_TO_ID.get(key, name)
+
+
 async def sync_businesses_from_api():
     """Nonbor API dan bizneslarni sellers.json ga avtomatik sync qilish"""
     from .models import Seller
@@ -610,7 +767,7 @@ async def sync_businesses_from_api():
             if not phone:
                 continue
 
-            region = b.get('region_name_uz', '')
+            region = _normalize_region(b.get('region_name_uz', ''))
             district = b.get('district_name_uz', '')
             address = f"{region}, {district}".strip(', ') if region or district else ''
             title = b.get('title', '')
@@ -828,11 +985,11 @@ async def fetch_and_send_orders():
     if not api_url:
         return
 
-    # state parametri qo'shsak API barcha statuslarni qaytaradi
+    # CHECKING — rasmiylashtirilmoqda (guruhga yuboriladigan asosiy status)
     if '?' not in api_url:
-        api_url += '?state=PENDING'
+        api_url += '?state=CHECKING'
     elif 'state=' not in api_url:
-        api_url += '&state=PENDING'
+        api_url += '&state=CHECKING'
 
     try:
         api_secret = os.getenv('EXTERNAL_API_SECRET', 'nonbor-secret-key')
@@ -1007,6 +1164,10 @@ async def cleanup_expired_orders():
 
             # Faqat 'new' statusidagi buyurtmalarni tekshirish
             if order.status != 'new':
+                continue
+
+            # TEST buyurtmalarni o'chirmaymiz
+            if str(order.external_id).startswith('TEST'):
                 continue
 
             # notified_at vaqtini tekshirish
